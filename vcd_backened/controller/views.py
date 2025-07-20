@@ -45,7 +45,6 @@ def check_boom(request):
             return Response({"command": "NO_ACTION"}, status=200)
 
         if boom.entryboom == 'Y':
-            # Reset entryboom and update timestamp
             boom.entryboom = 'N'
             boom.entrysynctime = timezone.now()
             boom.barrier_open_count += 1
@@ -53,7 +52,7 @@ def check_boom(request):
             print(f"[GATE {gate_id}] Entry boom opened.")
             return Response({"command": "|OPENEN%"}, status=200)
 
-        return Response({"command": "|NO_ACTION%"}, status=200)
+        return Response({"command": "NO_ACTION"}, status=200)
 
     except ValueError:
         return Response({"error": "Invalid gate_id format"}, status=400)

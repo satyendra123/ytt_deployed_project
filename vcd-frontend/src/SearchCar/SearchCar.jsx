@@ -30,7 +30,7 @@ export const SearchCar = () => {
         }, 10000);
       }
 
-      const endpoint = "http://localhost:8000/barrier_open/";
+      const endpoint = "http://localhost:5000/barrier_open/";
       const payload = { gate_number: gateNumber };
       await axios.post(endpoint, payload);
     } catch (error) {
