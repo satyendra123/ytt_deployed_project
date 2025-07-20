@@ -1,0 +1,10 @@
+{
+    "images": [ "image_data_1", "image_data_2", "image_data_3", "image_data_4", "image_data_5", "image_data_6", "image_data_7", "image_data_8", "image_data_9", "image_data_10"],
+    "vehicle_number": "Up16CD5678",
+    "vehicle_type": "Sedan",
+    "vehicle_color": "Red",
+    "gate_number": 1,
+    "status": "Approved",
+    "signal": "Online"
+}
+  

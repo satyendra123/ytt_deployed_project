@@ -1,0 +1,53 @@
+{
+    "ActivityLogs": [
+      {
+        "images": ["image_data_1","image_data_2","image_data_3","image_data_4","image_data_5","image_data_6","image_data_7","image_data_8","image_data_9","image_data_10"],
+        "Date": "10/01/2024 23:09",
+        "vehicle_number": "Up16CD5678",
+        "Plate Type": "Commercial",
+        "vehicle_type": "Bus",
+        "vehicle_color": "Yellow",
+        "gate_number": 1,
+        "status": "Approved",
+        "signal": "Online",
+        "plate_image": "image_data_1"
+      },
+      {
+        "images": ["image_data_1","image_data_2","image_data_3","image_data_4","image_data_5","image_data_6","image_data_7","image_data_8","image_data_9","image_data_10"],
+        "Date": "10/01/2024 23:09",
+        "vehicle_number": "Up16CD5678",
+        "Plate Type": "Commercial",
+        "vehicle_type": "Car",
+        "vehicle_color": "Red",
+        "gate_number": 2,
+        "status": "Approved",
+        "signal": "Online",
+        "plate_image": "image_data_1"
+      },
+      {
+        "images": ["image_data_1","image_data_2","image_data_3","image_data_4","image_data_5","image_data_6","image_data_7","image_data_8","image_data_9","image_data_10"],
+        "Date": "10/01/2024 23:09",
+        "vehicle_number": "Up16CD5678",
+        "Plate Type": "Commercial",
+        "vehicle_type": "Car",
+        "vehicle_color": "Red",
+        "gate_number": 3,
+        "status": "Approved",
+        "signal": "Online",
+        "plate_image": "image_data_1"
+      },
+      {
+        "images": ["image_data_1","image_data_2","image_data_3","image_data_4","image_data_5","image_data_6","image_data_7","image_data_8","image_data_9","image_data_10"],
+        "Date": "10/01/2024 23:09",
+        "vehicle_number": "Up16CD5678",
+        "Plate Type": "Commercial",
+        "vehicle_type": "Car",
+        "vehicle_color": "Red",
+        "gate_number": 4,
+        "status": "Approved",
+        "signal": "Online",
+        "plate_image": "image_data_1"
+      }
+    ]
+  }
+  
