@@ -22,7 +22,7 @@ except Exception as e:
 python "C:\Users\Satyendra Singh\AppData\Roaming\Python\Python39\Scripts\pyinstaller.exe" --onefile --noconsole --hidden-import=authentication --hidden-import=authentication.apps --hidden-import=authentication.urls --hidden-import=accounts --hidden-import=accounts.apps --hidden-import=accounts.urls --hidden-import=controller --hidden-import=controller.apps --hidden-import=controller.urls --hidden-import=dashboard --hidden-import=dashboard.apps --hidden-import=dashboard.urls --hidden-import=dj_rest_auth --hidden-import=dj_rest_auth.registration --hidden-import=allauth --hidden-import=allauth.account --hidden-import=allauth.socialaccount --hidden-import=rest_framework run_server.py
 
 b) frontend exe - frontend code making the exe without using the build dependency
-1)npm install express mime-types
+1) npm install express mime-types
 2) npm install pkg
 3) npm install server-handle
 
