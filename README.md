@@ -22,11 +22,11 @@ except Exception as e:
 python "C:\Users\Satyendra Singh\AppData\Roaming\Python\Python39\Scripts\pyinstaller.exe" --onefile --noconsole --hidden-import=authentication --hidden-import=authentication.apps --hidden-import=authentication.urls --hidden-import=accounts --hidden-import=accounts.apps --hidden-import=accounts.urls --hidden-import=controller --hidden-import=controller.apps --hidden-import=controller.urls --hidden-import=dashboard --hidden-import=dashboard.apps --hidden-import=dashboard.urls --hidden-import=dj_rest_auth --hidden-import=dj_rest_auth.registration --hidden-import=allauth --hidden-import=allauth.account --hidden-import=allauth.socialaccount --hidden-import=rest_framework run_server.py
 
 b) frontend exe - frontend code making the exe without using the build dependency
+1)npm install express mime-types
+2) npm install pkg
+3) npm install server-handle
 
-1) npm install pkg
-2) npm install server-handle
-
-3)  make a file loadStaticFiles.js code when it is made by the create-react-app
+4)  make a file loadStaticFiles.js code when it is made by the create-react-app
 a) loadStaticFiles.js
 const fs = require('fs');
 const path = require('path');
@@ -84,9 +84,9 @@ app.listen(PORT, () => {
   exec(`start http://localhost:${PORT}`);
 });
 
-4) npm run build. so if build folder is created then in the server.js we need to write __dirname, "build". and if dist folder is created then __dirname, "dist" is made
+5) npm run build. so if build folder is created then in the server.js we need to write __dirname, "build". and if dist folder is created then __dirname, "dist" is made
 
-5) add this line in the package.json file. below the name and the error
+6) add this line in the package.json file. below the name and the error
  "bin": "server.js",
   "pkg": {
     "assets": [
