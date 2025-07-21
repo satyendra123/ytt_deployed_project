@@ -26,65 +26,74 @@ b) frontend exe - frontend code making the exe without using the build dependenc
 1) npm install pkg
 2) npm install server-handle
 
-3)  make a file server.js code when it is made by the create-react-app
-server.js
+3)  make a file loadStaticFiles.js code when it is made by the create-react-app
+a) loadStaticFiles.js
+const fs = require('fs');
+const path = require('path');
+const mime = require('mime-types');
 
-const path = require("path");
-const fs = require("fs");
-const http = require("http");
-const { exec } = require("child_process");
+function readFilesRecursively(dir, base = '') {
+  let files = {};
+  const items = fs.readdirSync(dir);
 
-// Serve files from 'build' folder
-const baseDir = path.join(process.pkg ? path.dirname(process.execPath) : __dirname, "build");
+  items.forEach((item) => {
+    const fullPath = path.join(dir, item);
+    const relativePath = path.join(base, item).replace(/\\/g, '/');
+    const stat = fs.statSync(fullPath);
 
-function getContentType(filePath) {
-  const ext = path.extname(filePath);
-  if (ext === ".js") return "application/javascript";
-  if (ext === ".css") return "text/css";
-  if (ext === ".html") return "text/html";
-  if (ext === ".json") return "application/json";
-  if (ext === ".ico") return "image/x-icon";
-  if (ext === ".png") return "image/png";
-  return "text/plain";
-}
-
-const server = http.createServer((req, res) => {
-  const reqPath = req.url === "/" ? "/index.html" : req.url;
-  const filePath = path.join(baseDir, reqPath);
-
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      // Fallback to index.html for SPA
-      fs.readFile(path.join(baseDir, "index.html"), (err, fallback) => {
-        if (err) {
-          res.writeHead(404);
-          res.end("404 Not Found");
-        } else {
-          res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(fallback);
-        }
-      });
+    if (stat.isDirectory()) {
+      files = { ...files, ...readFilesRecursively(fullPath, relativePath) };
     } else {
-      res.writeHead(200, { "Content-Type": getContentType(filePath) });
-      res.end(data);
+      files[`/${relativePath}`] = {
+        content: fs.readFileSync(fullPath),
+        contentType: mime.lookup(item) || 'application/octet-stream',
+      };
     }
   });
+
+  return files;
+}
+
+module.exports = readFilesRecursively;
+
+b) server.js
+const express = require('express');
+const { exec } = require('child_process');
+const path = require('path');
+
+const readFilesRecursively = require('./loadStaticFiles');
+const staticFiles = readFilesRecursively(path.join(__dirname, 'build'));
+
+const app = express();
+
+app.get('*', (req, res) => {
+  const reqPath = req.path === '/' ? '/index.html' : req.path;
+  const file = staticFiles[reqPath];
+
+  if (file) {
+    res.setHeader('Content-Type', file.contentType);
+    res.send(file.content);
+  } else {
+    res.status(404).send('Not Found');
+  }
 });
 
-server.listen(3000, () => {
-  console.log("Server running at http://localhost:3000");
-  exec("start http://localhost:3000");
+const PORT = 3000;
+app.listen(PORT, () => {
+  console.log(`App running at http://localhost:${PORT}`);
+  exec(`start http://localhost:${PORT}`);
 });
 
 4) npm run build. so if build folder is created then in the server.js we need to write __dirname, "build". and if dist folder is created then __dirname, "dist" is made
 
 5) add this line in the package.json file. below the name and the error
-"main": "server.js",
+ "bin": "server.js",
   "pkg": {
-  "assets": [
-    "build/**/*"
-  ]
+    "assets": [
+      "build/**/*"
+   ]
   },
   
-6) pkg server.js --targets node18-win-x64 --output yttfrontend.exe
+7)pkg . --targets node18-win-x64 --output yttfrontend.exe
+
 
