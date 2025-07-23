@@ -146,10 +146,18 @@ app.get('*', (req, res) => {
   const file = staticFiles[reqPath];
 
   if (file) {
+    // Serve actual static file
     res.setHeader('Content-Type', file.contentType);
     res.send(Buffer.from(file.content, 'base64'));
   } else {
-    res.status(404).send('Not Found');
+    // Fallback to index.html for client-side routes like /dashboard, /boom, etc.
+    const indexFile = staticFiles['/index.html'];
+    if (indexFile) {
+      res.setHeader('Content-Type', indexFile.contentType);
+      res.send(Buffer.from(indexFile.content, 'base64'));
+    } else {
+      res.status(404).send('Not Found');
+    }
   }
 });
 
@@ -159,4 +167,7 @@ app.listen(PORT, () => {
   exec(`start http://localhost:${PORT}`);
 });
 
-3) node loadStaticFiles.js first run this file 
+3) npm run build
+4) node loadStaticFiles.js
+5) pkg . --targets node18-win-x64 --output yttfrontend.exe
+
