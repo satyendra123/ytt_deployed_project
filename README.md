@@ -24,7 +24,7 @@ python "C:\Users\Satyendra Singh\AppData\Roaming\Python\Python39\Scripts\pyinsta
 b) frontend exe - frontend code making the exe without using the build dependency
 1) npm install express mime-types
 2) npm install pkg
-3) npm install server-handler
+3) npm install serve-handler
 
 4)  make a file loadStaticFiles.js code when it is made by the create-react-app
 a) loadStaticFiles.js
