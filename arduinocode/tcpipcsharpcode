@@ -1,0 +1,172 @@
+using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using MySql.Data.MySqlClient;
+
+namespace GateServerDirectDB
+{
+    class Program
+    {
+        static string connectionString = "Server=localhost;Database=your_database_name;Uid=your_username;Pwd=your_password;";
+        static int port = 8080;
+
+        // Keep track of the connected client stream
+        static NetworkStream activeStream = null;
+        static readonly object streamLock = new object();
+
+        static void Main(string[] args)
+        {
+            TcpListener server = new TcpListener(IPAddress.Any, port);
+            server.Start();
+            Console.WriteLine($"TCP Server started on port {port}");
+
+            // Start boomsig checker thread
+            Thread boomCheckThread = new Thread(CheckBoomsigContinuously);
+            boomCheckThread.IsBackground = true;
+            boomCheckThread.Start();
+
+            while (true)
+            {
+                TcpClient client = server.AcceptTcpClient();
+                Console.WriteLine("Client connected: " + client.Client.RemoteEndPoint);
+
+                // Store active stream reference for use by boomsig thread
+                lock (streamLock)
+                {
+                    activeStream = client.GetStream();
+                }
+
+                Thread thread = new Thread(() => HandleClient(client));
+                thread.Start();
+            }
+        }
+
+        static void HandleClient(TcpClient client)
+        {
+            NetworkStream stream = client.GetStream();
+            byte[] buffer = new byte[1024];
+            StringBuilder sb = new StringBuilder();
+
+            while (true)
+            {
+                int bytesRead;
+                try
+                {
+                    bytesRead = stream.Read(buffer, 0, buffer.Length);
+                }
+                catch
+                {
+                    Console.WriteLine("Client disconnected.");
+                    break;
+                }
+
+                if (bytesRead == 0) break;
+
+                string received = Encoding.ASCII.GetString(buffer, 0, bytesRead);
+                sb.Append(received);
+
+                while (sb.ToString().Contains("|FF|"))
+                {
+                    string message = ExtractFullMessage(ref sb);
+                    Console.WriteLine("Received: " + message);
+
+                    if (message.StartsWith("|AA|"))
+                    {
+                        string[] parts = message.Split('|');
+                        if (parts.Length >= 5)
+                        {
+                            string gate = parts[2];
+                            string action = parts[3].ToLower(); // "entry" or "exit"
+                            InsertIntoDatabase(gate, action);
+                        }
+                    }
+                }
+            }
+        }
+
+        static string ExtractFullMessage(ref StringBuilder sb)
+        {
+            int endIndex = sb.ToString().IndexOf("|FF|") + 4;
+            string message = sb.ToString().Substring(0, endIndex);
+            sb.Remove(0, endIndex);
+            return message;
+        }
+
+        static void InsertIntoDatabase(string gate, string action)
+        {
+            try
+            {
+                using (MySqlConnection conn = new MySqlConnection(connectionString))
+                {
+                    conn.Open();
+                    string sql = "INSERT INTO your_appname_carlog (gate, action, created_at, updated_at) VALUES (@gate, @action, NOW(), NOW())";
+                    using (MySqlCommand cmd = new MySqlCommand(sql, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@gate", gate);
+                        cmd.Parameters.AddWithValue("@action", action);
+                        int result = cmd.ExecuteNonQuery();
+                        Console.WriteLine($"Inserted into DB: Gate={gate}, Action={action}, RowsAffected={result}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("DB Insert Error: " + ex.Message);
+            }
+        }
+
+        static void CheckBoomsigContinuously()
+        {
+            while (true)
+            {
+                try
+                {
+                    using (MySqlConnection conn = new MySqlConnection(connectionString))
+                    {
+                        conn.Open();
+                        string query = "SELECT id, entryboom FROM boomsig WHERE entryboom = 'Y' LIMIT 1";
+                        using (MySqlCommand cmd = new MySqlCommand(query, conn))
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                int boomId = reader.GetInt32("id");
+
+                                Console.WriteLine("Boomsig entryboom = Y detected. Sending |OPENEN% to Arduino...");
+
+                                // Send |OPENEN% to Arduino
+                                lock (streamLock)
+                                {
+                                    if (activeStream != null && activeStream.CanWrite)
+                                    {
+                                        byte[] data = Encoding.ASCII.GetBytes("|OPENEN%");
+                                        activeStream.Write(data, 0, data.Length);
+                                        Console.WriteLine("Sent: |OPENEN%");
+                                    }
+                                }
+
+                                // Update entryboom back to 'N'
+                                reader.Close();
+                                string updateSql = "UPDATE boomsig SET entryboom = 'N', entrysynctime = NOW(), barrier_open_count = barrier_open_count + 1 WHERE id = @id";
+                                using (MySqlCommand updateCmd = new MySqlCommand(updateSql, conn))
+                                {
+                                    updateCmd.Parameters.AddWithValue("@id", boomId);
+                                    updateCmd.ExecuteNonQuery();
+                                    Console.WriteLine("Updated boomsig entryboom to N.");
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Error checking boomsig: " + ex.Message);
+                }
+
+                Thread.Sleep(2000); // wait 2 seconds before checking again
+            }
+        }
+    }
+}
