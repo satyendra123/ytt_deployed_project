@@ -4,42 +4,82 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using MySql.Data.MySqlClient;
+using System.IO;
 
 namespace GateServerDirectDB
 {
     class Program
     {
-        static string connectionString = "Server=localhost;Database=your_database_name;Uid=your_username;Pwd=your_password;";
-        static int port = 8080;
-
-        // Keep track of the connected client stream
+        static string connectionString = "";
+        static int port = 6000;
         static NetworkStream activeStream = null;
         static readonly object streamLock = new object();
+        static readonly string logFilePath = "connectivitylog.txt";
 
         static void Main(string[] args)
         {
-            TcpListener server = new TcpListener(IPAddress.Any, port);
-            server.Start();
-            Console.WriteLine($"TCP Server started on port {port}");
-
-            // Start boomsig checker thread
-            Thread boomCheckThread = new Thread(CheckBoomsigContinuously);
-            boomCheckThread.IsBackground = true;
-            boomCheckThread.Start();
+            LoadConfig();
 
             while (true)
             {
-                TcpClient client = server.AcceptTcpClient();
-                Console.WriteLine("Client connected: " + client.Client.RemoteEndPoint);
-
-                // Store active stream reference for use by boomsig thread
-                lock (streamLock)
+                try
                 {
-                    activeStream = client.GetStream();
+                    TcpListener server = new TcpListener(IPAddress.Any, port);
+                    server.Start();
+                    Console.WriteLine($"TCP Server started on port {port}");
+                    LogToFile($"TCP Server started on port {port}");
+
+                    Thread boomCheckThread = new Thread(CheckBoomsigContinuously);
+                    boomCheckThread.IsBackground = true;
+                    boomCheckThread.Start();
+
+                    while (true)
+                    {
+                        TcpClient client = server.AcceptTcpClient();
+                        Console.WriteLine("Client connected: " + client.Client.RemoteEndPoint);
+                        LogToFile("Client connected: " + client.Client.RemoteEndPoint);
+
+                        lock (streamLock)
+                        {
+                            activeStream = client.GetStream();
+                        }
+
+                        Thread thread = new Thread(() => HandleClient(client));
+                        thread.Start();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    string msg = "TCP server crashed: " + ex.Message;
+                    Console.WriteLine(msg);
+                    LogToFile(msg);
+                    Console.WriteLine("Retrying to start server in 5 seconds...");
+                    Thread.Sleep(5000);
+                }
+            }
+        }
+
+        static void LoadConfig()
+        {
+            try
+            {
+                string[] lines = File.ReadAllLines("config.txt");
+
+                foreach (string line in lines)
+                {
+                    if (line.StartsWith("server_port="))
+                        int.TryParse(line.Substring("server_port=".Length), out port);
+                    else if (line.StartsWith("db_connection="))
+                        connectionString = line.Substring("db_connection=".Length);
                 }
 
-                Thread thread = new Thread(() => HandleClient(client));
-                thread.Start();
+                LogToFile($"Configuration loaded. Port={port}");
+            }
+            catch (Exception ex)
+            {
+                LogToFile("Error reading config.txt: " + ex.Message);
+                Console.WriteLine("Fatal: Could not read config.txt");
+                Environment.Exit(1);
             }
         }
 
@@ -59,6 +99,7 @@ namespace GateServerDirectDB
                 catch
                 {
                     Console.WriteLine("Client disconnected.");
+                    LogToFile("Client disconnected unexpectedly.");
                     break;
                 }
 
@@ -66,6 +107,11 @@ namespace GateServerDirectDB
 
                 string received = Encoding.ASCII.GetString(buffer, 0, bytesRead);
                 sb.Append(received);
+
+                if (received.Contains("|HLT%"))
+                {
+                    LogToFile("Heartbeat received from Arduino.");
+                }
 
                 while (sb.ToString().Contains("|FF|"))
                 {
@@ -107,13 +153,16 @@ namespace GateServerDirectDB
                         cmd.Parameters.AddWithValue("@gate", gate);
                         cmd.Parameters.AddWithValue("@action", action);
                         int result = cmd.ExecuteNonQuery();
-                        Console.WriteLine($"Inserted into DB: Gate={gate}, Action={action}, RowsAffected={result}");
+                        Console.WriteLine($"Inserted into DB: Gate={gate}, Action={action}");
+                        LogToFile($"Inserted into DB: Gate={gate}, Action={action}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine("DB Insert Error: " + ex.Message);
+                string errMsg = "DB Insert Error: " + ex.Message;
+                Console.WriteLine(errMsg);
+                LogToFile(errMsg);
             }
         }
 
@@ -135,8 +184,8 @@ namespace GateServerDirectDB
                                 int boomId = reader.GetInt32("id");
 
                                 Console.WriteLine("Boomsig entryboom = Y detected. Sending |OPENEN% to Arduino...");
+                                LogToFile("Boomsig trigger detected. Sending |OPENEN% to Arduino.");
 
-                                // Send |OPENEN% to Arduino
                                 lock (streamLock)
                                 {
                                     if (activeStream != null && activeStream.CanWrite)
@@ -144,17 +193,18 @@ namespace GateServerDirectDB
                                         byte[] data = Encoding.ASCII.GetBytes("|OPENEN%");
                                         activeStream.Write(data, 0, data.Length);
                                         Console.WriteLine("Sent: |OPENEN%");
+                                        LogToFile("Sent command |OPENEN% to Arduino.");
                                     }
                                 }
 
-                                // Update entryboom back to 'N'
                                 reader.Close();
+
                                 string updateSql = "UPDATE boomsig SET entryboom = 'N', entrysynctime = NOW(), barrier_open_count = barrier_open_count + 1 WHERE id = @id";
                                 using (MySqlCommand updateCmd = new MySqlCommand(updateSql, conn))
                                 {
                                     updateCmd.Parameters.AddWithValue("@id", boomId);
                                     updateCmd.ExecuteNonQuery();
-                                    Console.WriteLine("Updated boomsig entryboom to N.");
+                                    LogToFile("Updated boomsig entryboom to 'N'.");
                                 }
                             }
                         }
@@ -162,10 +212,25 @@ namespace GateServerDirectDB
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Error checking boomsig: " + ex.Message);
+                    string err = "Error checking boomsig: " + ex.Message;
+                    Console.WriteLine(err);
+                    LogToFile(err);
                 }
 
-                Thread.Sleep(2000); // wait 2 seconds before checking again
+                Thread.Sleep(2000);
+            }
+        }
+
+        static void LogToFile(string message)
+        {
+            string logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
+            try
+            {
+                File.AppendAllText(logFilePath, logEntry + Environment.NewLine);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Logging Error: " + ex.Message);
             }
         }
     }
