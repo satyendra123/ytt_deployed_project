@@ -33,10 +33,12 @@ void resetSequence() {
 }
 
 void sendEntryExitData(bool isEntry) {
-  String msg = isEntry ? "|ENTRY|" : "|EXIT|";
-  msg += String(gate_id) + "%";
-  Serial.println(msg);  // Send to server
+  String msg = "|AA|";
+  msg += String(gate_id);
+  msg += isEntry ? "|ENTRY|FF|" : "|EXIT|FF|";
+  Serial.println(msg);
 }
+
 
 void openGate() {
   digitalWrite(relayPin, LOW);
