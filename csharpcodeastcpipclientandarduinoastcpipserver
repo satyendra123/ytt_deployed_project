@@ -1,0 +1,225 @@
+// TcpQrClient.cs — simplified without regex parsing
+// Reads Arduino TCP messages like |AA|<gate>|ENTRY|FF| or |AA|<gate>|EXIT|FF|
+// Inserts into dashboard_carlog (gate, action, created_at, updated_at)
+// Ignores |HLT% heartbeats
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using MySql.Data.MySqlClient;
+
+class TcpQrClient
+{
+    static TcpClient client;
+    static NetworkStream stream;
+    static string serverIp;
+    static int serverPort;
+    static string connString;
+
+    static string configPath = "config.txt";
+    static string logPath = "connectivitylog.txt";
+
+    static StringBuilder recvBuffer = new StringBuilder();
+
+    static DateTime lastBoomsigCheck = DateTime.MinValue;
+    static readonly TimeSpan boomsigInterval = TimeSpan.FromMilliseconds(1000);
+
+    static void Main()
+    {
+        LoadConfig();
+
+        while (true)
+        {
+            try
+            {
+                Log($"Trying to connect to {serverIp}:{serverPort}...");
+                client = new TcpClient();
+                client.NoDelay = true;
+                client.Connect(serverIp, serverPort);
+
+                stream = client.GetStream();
+                Log("Connected to Arduino");
+
+                byte[] buffer = new byte[1024];
+
+                while (client.Connected)
+                {
+                    if (DateTime.UtcNow - lastBoomsigCheck >= boomsigInterval)
+                    {
+                        lastBoomsigCheck = DateTime.UtcNow;
+                        if (CheckBoomsigAndTriggerRelay())
+                        {
+                            Log("entryboom was Y, command sent to Arduino and updated to N.");
+                        }
+                    }
+
+                    if (stream.DataAvailable)
+                    {
+                        int read = stream.Read(buffer, 0, buffer.Length);
+                        if (read > 0)
+                        {
+                            recvBuffer.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                            ProcessBuffer();
+                        }
+                    }
+
+                    Thread.Sleep(50);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Connection Error: " + ex.Message);
+                Thread.Sleep(3000);
+            }
+            finally
+            {
+                try { stream?.Close(); } catch { }
+                try { client?.Close(); } catch { }
+                Log("Disconnected. Retrying in 3 seconds...");
+            }
+        }
+    }
+
+    static void LoadConfig()
+    {
+        try
+        {
+            var config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in File.ReadAllLines(configPath))
+            {
+                if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#") || !line.Contains("=")) continue;
+                var parts = line.Split('=', 2);
+                config[parts[0].Trim()] = parts[1].Trim();
+            }
+
+            serverIp = config["server_ip"];
+            serverPort = int.Parse(config["server_port"]);
+            connString = config["db_connection"];
+        }
+        catch (Exception ex)
+        {
+            Log("Error reading config.txt: " + ex.Message);
+            Environment.Exit(1);
+        }
+    }
+
+    static bool CheckBoomsigAndTriggerRelay()
+    {
+        try
+        {
+            using (var conn = new MySqlConnection(connString))
+            {
+                conn.Open();
+                using (var cmd = new MySqlCommand("SELECT entryboom FROM boomsig WHERE id = 1", conn))
+                {
+                    var result = cmd.ExecuteScalar();
+                    if (result != null && result.ToString().Trim().Equals("Y", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SendString("|OPENEN%");
+                        using (var updateCmd = new MySqlCommand("UPDATE boomsig SET entryboom='N' WHERE id=1", conn))
+                        {
+                            updateCmd.ExecuteNonQuery();
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("Database Error: " + ex.Message);
+        }
+        return false;
+    }
+
+    static void SendString(string s)
+    {
+        if (stream == null) return;
+        try
+        {
+            byte[] data = Encoding.ASCII.GetBytes(s);
+            stream.Write(data, 0, data.Length);
+        }
+        catch (Exception ex)
+        {
+            Log("Send Error: " + ex.Message);
+        }
+    }
+
+    static void ProcessBuffer()
+    {
+        string buf = recvBuffer.ToString();
+        int idx;
+
+        while ((idx = buf.IndexOf('|')) != -1)
+        {
+            // Try to find a complete message ending with '|' or '%'
+            int endIdx = buf.IndexOf('%');
+            if (endIdx == -1) endIdx = buf.IndexOf('|', idx + 1);
+            if (endIdx == -1) break;
+
+            string message = buf.Substring(0, endIdx + 1);
+            buf = buf.Substring(endIdx + 1);
+
+            HandleMessage(message.Trim());
+        }
+
+        recvBuffer.Clear();
+        recvBuffer.Append(buf);
+    }
+
+    static void HandleMessage(string msg)
+    {
+        if (string.IsNullOrWhiteSpace(msg)) return;
+        if (msg.StartsWith("|HLT%")) return; // heartbeat, ignore
+
+        if (msg.StartsWith("|AA|"))
+        {
+            var parts = msg.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 4)
+            {
+                string gate = parts[1];
+                string action = parts[2].ToUpper();
+                if (action == "ENTRY" || action == "EXIT")
+                {
+                    SaveCarLog(gate, action);
+                }
+            }
+        }
+    }
+
+    static void SaveCarLog(string gate, string action)
+    {
+        try
+        {
+            using (var conn = new MySqlConnection(connString))
+            {
+                conn.Open();
+                string sql = "INSERT INTO dashboard_carlog (gate, action, created_at, updated_at) VALUES (@gate, @action, NOW(), NOW())";
+                using (var cmd = new MySqlCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@gate", gate);
+                    cmd.Parameters.AddWithValue("@action", action);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            Log($"Inserted dashboard_carlog: Gate={gate}, Action={action}");
+        }
+        catch (Exception ex)
+        {
+            Log("DB Insert Error: " + ex.Message);
+        }
+    }
+
+    static void Log(string message)
+    {
+        try
+        {
+            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+        }
+        catch { }
+    }
+}
