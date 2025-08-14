@@ -160,29 +160,24 @@ void checkBoomSig() {
     lastBoomSigCheck = millis();
 
     if (client.connect("192.168.1.128", 8000)) {
-      String request = "GET /check_boomsig?gate_id=" + String(gate_id) + " HTTP/1.1\r\n";
-      request += "Host: 192.168.1.128\r\n";
-      request += "\r\n";
-      client.print(request);
+      client.println("GET /check_boomsig?gate_id=1 HTTP/1.1");
+      client.println("Host: 192.168.1.128");
+      client.println("Connection: close");
+      client.println();
+      Serial.println("Request sent: /check_boomsig?gate_id=1");
 
-      unsigned long startTime = millis();
-      while (!client.available()) {
-        if (millis() - startTime > 5000) {
-          Serial.println("Server not responding.");
-          client.stop();
-          return;
+      while (client.connected()) {
+        if (client.available()) {
+          String line = client.readStringUntil('\n');
+          line.trim();
+          if (line.startsWith("{") && line.endsWith("}")) {
+            Serial.println(line);
+            if (line.indexOf("|OPENEN%") >= 0) {
+              openGate();
+            }
+          }
         }
       }
-
-      String response = "";
-      while (client.available()) {
-        response += (char)client.read();
-      }
-
-      if (response.indexOf("|OPENEN%") != -1) {
-        openGate();
-      }
-
       client.stop();
     }
   }
