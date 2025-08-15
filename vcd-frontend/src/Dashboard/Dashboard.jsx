@@ -16,7 +16,7 @@ const Dashboard = () => {
   useEffect(()=>{
     const fetchData = async () => {
       try {
-        const response = await fetch("http://127.0.0.1:5000/dashboard_data/");
+        const response = await fetch("http://127.0.0.1:8000/dashboard_data/");
         const result = await response.json();
         setData(result);
         console.log(result);
