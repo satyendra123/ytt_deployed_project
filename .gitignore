@@ -141,3 +141,7 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+venv/
+__pycache__/
+vcd_backened/venv/
+*/__pycache__/
