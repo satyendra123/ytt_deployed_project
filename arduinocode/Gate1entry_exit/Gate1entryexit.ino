@@ -160,24 +160,29 @@ void checkBoomSig() {
     lastBoomSigCheck = millis();
 
     if (client.connect("192.168.1.128", 8000)) {
-      client.println("GET /check_boomsig?gate_id=1 HTTP/1.1");
-      client.println("Host: 192.168.1.128");
-      client.println("Connection: close");
-      client.println();
-      Serial.println("Request sent: /check_boomsig?gate_id=1");
+      String request = "GET /check_boomsig?gate_id=" + String(gate_id) + " HTTP/1.1\r\n";
+      request += "Host: 192.168.1.128\r\n";
+      request += "\r\n";
+      client.print(request);
 
-      while (client.connected()) {
-        if (client.available()) {
-          String line = client.readStringUntil('\n');
-          line.trim();
-          if (line.startsWith("{") && line.endsWith("}")) {
-            Serial.println(line);
-            if (line.indexOf("|OPENEN%") >= 0) {
-              openGate();
-            }
-          }
+      unsigned long startTime = millis();
+      while (!client.available()) {
+        if (millis() - startTime > 5000) {
+          Serial.println("Server not responding.");
+          client.stop();
+          return;
         }
       }
+
+      String response = "";
+      while (client.available()) {
+        response += (char)client.read();
+      }
+
+      if (response.indexOf("|OPENEN%") != -1) {
+        openGate();
+      }
+
       client.stop();
     }
   }
@@ -192,7 +197,7 @@ void loop() {
 
 #include <SPI.h>
 #include <Ethernet.h>
-#include <avr/wdt.h>  // Watchdog Timer
+#include <avr/wdt.h>
 
 #define LOOP_A_PIN 6
 #define LOOP_B_PIN 7
@@ -228,29 +233,21 @@ void setup() {
 }
 
 void loop() {
-  wdt_reset();  // Keep watchdog happy
-
+  wdt_reset();
   checkLoopSequence();
-  wdt_reset();
-
   checkBoomSig();
-  wdt_reset();
-
   checkEthernetConnection();
-  wdt_reset();
 }
 
 void startEthernet() 
 { 
   Serial.println("Initializing Ethernet..."); 
-  Ethernet.begin(mac, ip); 
   delay(2000); 
+  Ethernet.begin(mac, ip); 
   Serial.print("Machine Gate IP: "); 
   Serial.println(Ethernet.localIP()); 
 }
 
-
-// -------------------- Ethernet Auto-Reconnect --------------------
 void checkEthernetConnection() {
   if (millis() - lastEthernetCheck >= ethernetCheckInterval) {
     lastEthernetCheck = millis();
