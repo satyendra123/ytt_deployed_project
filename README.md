@@ -7,11 +7,11 @@ from anpr_backened.wsgi import application
 
 logging.basicConfig(filename="server.log",filemode="w",level=logging.DEBUG,format="%(asctime)s [%(levelname)s] %(message)s")
 
-print("🔧 Starting Waitress server on http://0.0.0.0:5000")
+print("🔧 Starting Waitress server on http://0.0.0.0:8000")
 logging.info("Starting Waitress server...")
 
 try:
-    serve(application, host='0.0.0.0', port=5000)
+    serve(application, host='0.0.0.0', port=8000)
 except Exception as e:
     logging.error(" Exception occurred while running server:")
     logging.error(traceback.format_exc())
