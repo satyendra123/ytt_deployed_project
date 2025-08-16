@@ -169,5 +169,7 @@ app.listen(PORT, () => {
 
 3) npm run build
 4) node loadStaticFiles.js
-5) pkg . --targets node18-win-x64 --output yttfrontend.exe
+5) pkg . --targets node18-win-x64 --output yttfrontend.exe agar ye command se koi error dikhaye to direct ye wala command run kare
+   pkg server.js --targets node18-win-x64 --output yttfrontend.exe
+
 
