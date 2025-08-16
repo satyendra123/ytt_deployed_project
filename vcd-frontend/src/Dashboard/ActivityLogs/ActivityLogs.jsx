@@ -102,7 +102,10 @@ const ActivityLogs = () => {
   {new Date(log.created_at).toISOString().split("T")[0]} {/* YYYY-MM-DD */}
 </td>
 <td className="px-4 py-2 text-center">
-  {new Date(log.created_at).toISOString().split("T")[1].split(".")[0]} {/* HH:MM:SS */}
+  {new Date(log.created_at).toLocaleTimeString("en-IN", {
+    hour12: false, // 24-hour format
+    timeZone: "Asia/Kolkata", // IST
+  })}
 </td>
                 </tr>
               ))}
