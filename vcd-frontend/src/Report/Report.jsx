@@ -204,7 +204,7 @@ const Report = () => {
                     <td className="px-4 py-2 text-center">Gate {item.gate}</td>
                     <td className="px-4 py-2 text-center capitalize">{item.action}</td>
                     <td className="px-4 py-2 text-center">{new Date(item.created_at).toLocaleDateString()}</td>
-                    <td className="px-4 py-2 text-center">{new Date(item.created_at).toLocaleTimeString()}</td>
+                    <td className="px-4 py-2 text-center">{new Date(log.created_at).toLocaleTimeString("en-IN", {hour12: false,timeZone: "Asia/Kolkata",})}</td>
                   </tr>
                 ))
               ) : (
