@@ -8,6 +8,7 @@ const ActivityLogs = () => {
 
   // Fetch data from the API endpoint
   useEffect(() => {
+    const fetchData = () => {
     fetch("http://127.0.0.1:8000/activity_log/")
       .then((response) => {
         if (!response.ok) {
@@ -31,6 +32,10 @@ const ActivityLogs = () => {
         setActivityLogs([]);
         setFilteredLogs([]);
       });
+}
+  fetchData();
+  const interval = setInterval(fetchData, 5000);
+  return () => clearInterval(interval);
   }, []);
 
   // Handle changes to the search input
@@ -98,8 +103,10 @@ const ActivityLogs = () => {
                   <td className="px-4 py-2 text-center">{index + 1}</td>
                   <td className="px-4 py-2 text-center">Gate {log.gate}</td>
                   <td className="px-4 py-2 text-center capitalize">{log.action}</td>
-                  <td className="px-4 py-2 text-center">
-  {new Date(log.created_at).toISOString().split("T")[0]} {/* YYYY-MM-DD */}
+                 <td className="px-4 py-2 text-center">
+  {new Date(log.created_at).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata"
+  })}
 </td>
 <td className="px-4 py-2 text-center">
   {new Date(log.created_at).toLocaleTimeString("en-IN", {
@@ -107,6 +114,7 @@ const ActivityLogs = () => {
     timeZone: "Asia/Kolkata", // IST
   })}
 </td>
+
                 </tr>
               ))}
             </tbody>
