@@ -30,7 +30,7 @@ export const SearchCar = () => {
         }, 10000);
       }
 
-      const endpoint = "http://localhost:5000/barrier_open/";
+      const endpoint = "http://localhost:8000/barrier_open/";
       const payload = { gate_number: gateNumber };
       await axios.post(endpoint, payload);
     } catch (error) {
@@ -53,6 +53,7 @@ export const SearchCar = () => {
           <div className="flex flex-col items-center">
             <div className="text-center font-semibold">Gate 1</div>
             <button
+             type="button"
               className="text-white font-semibold rounded-lg"
               onClick={() => openGate(1)}
             >
@@ -82,6 +83,7 @@ export const SearchCar = () => {
           <div className="flex flex-col items-center">
             <div className="text-center font-semibold">Gate 2</div>
             <button
+              type="button"
               className="text-white font-semibold rounded-lg"
               onClick={() => openGate(2)}
             >
