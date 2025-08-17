@@ -112,10 +112,10 @@ def barrier_open(request):
 
         elif gate_number == 2:
             # Update exitboom, exitsynctime, and increment barrier_open_count for gate 2
-            boom.exitboom = 'Y'
-            boom.exitsynctime = timezone.now()
+            boom.entryboom = 'Y'
+            boom.entrysynctime = timezone.now()
             boom.barrier_open_count = F('barrier_open_count') + 1
-            boom.save(update_fields=['exitboom', 'exitsynctime', 'barrier_open_count'])
+            boom.save(update_fields=['entryboom', 'entrysynctime', 'barrier_open_count'])
 
         # Insert into BarrierOpenLog
         BarrierOpenLog.objects.create(boom=boom)
