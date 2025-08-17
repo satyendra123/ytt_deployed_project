@@ -46,8 +46,7 @@ def check_boom(request):
             # Reset entryboom and update timestamp
             boom.entryboom = 'N'
             boom.entrysynctime = timezone.now()
-            boom.barrier_open_count += 1
-            boom.save(update_fields=['entryboom', 'entrysynctime', 'barrier_open_count'])
+            boom.save(update_fields=['entryboom', 'entrysynctime'])
             print(f"[GATE {gate_id}] Entry boom opened.")
             return Response({"command": "|OPENEN%"}, status=200)
 
