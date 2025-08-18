@@ -1,0 +1,42 @@
+#define relayPin 9
+
+String receivedString = "";
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH);  // relay OFF initially (assuming active LOW)
+
+  Serial.println("System Ready... Waiting for command.");
+}
+
+void openGate() {
+  Serial.println("Relay Triggered (Gate Opening)...");
+  digitalWrite(relayPin, LOW);   // activate relay
+  delay(1000);                   // keep relay ON for 1 sec
+  digitalWrite(relayPin, HIGH);  // deactivate relay
+  Serial.println("Relay Released (Gate Closed).");
+}
+
+void checkIncomingCommand() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    receivedString += c;
+
+    if (c == '%') {  // command terminator found
+      receivedString.trim();
+      Serial.println("Received: " + receivedString);
+
+      if (receivedString == "|OPENEN%") {
+        openGate();
+      }
+
+      // reset buffer after processing
+      receivedString = "";
+    }
+  }
+}
+
+void loop() {
+  checkIncomingCommand();
+}
