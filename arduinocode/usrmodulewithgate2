@@ -1,28 +1,49 @@
-#include <SoftwareSerial.h>
-
-#define LOOP_A_PIN 2
-#define LOOP_B_PIN 4
 #define relayPin 9
+#define LOOP_A_PIN 6
+#define LOOP_B_PIN 7
 
-unsigned long detectionTimestamp = 0;
-unsigned long timeout = 120000;
-unsigned long lastSequenceResetTime = 0;
-
-unsigned long lastHeartbeatTime = 0;
-const unsigned long heartbeatInterval = 3000;  // 3 seconds
+String receivedString = "";
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 3000;
 
 bool loopADetected = false;
 bool loopBDetected = false;
 bool sequenceComplete = false;
 
-const int gate_id = 2;
+unsigned long detectionTimestamp = 0;
+unsigned long lastSequenceResetTime = 0;
+unsigned long timeout = 120000;
+
+String gateId = "02";
 
 void setup() {
-  Serial.begin(9600); // USR-TCP232-T2 connected here
-  pinMode(LOOP_A_PIN, INPUT_PULLUP);
-  pinMode(LOOP_B_PIN, INPUT_PULLUP);
+  Serial.begin(115200);
   pinMode(relayPin, OUTPUT);
   digitalWrite(relayPin, HIGH);
+  pinMode(LOOP_A_PIN, INPUT_PULLUP);
+  pinMode(LOOP_B_PIN, INPUT_PULLUP);
+}
+
+void openGate() {
+  digitalWrite(relayPin, LOW);
+  delay(1000);
+  digitalWrite(relayPin, HIGH);
+}
+
+void checkIncomingCommand() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    receivedString += c;
+
+    if (c == '%') {
+      receivedString.trim();
+      Serial.println(receivedString);
+      if (receivedString == "|OPENEN%") {
+        openGate();
+      }
+      receivedString = "";
+    }
+  }
 }
 
 void resetSequence() {
@@ -33,18 +54,8 @@ void resetSequence() {
 }
 
 void sendEntryExitData(bool isEntry) {
-  String msg = "|AA|";
-  msg += String(gate_id);
-  msg += isEntry ? "|ENTRY|FF|" : "|EXIT|FF|";
+  String msg = "|AA|" + gateId + "|" + (isEntry ? "entry" : "exit") + "|FF|";
   Serial.println(msg);
-}
-
-
-void openGate() {
-  digitalWrite(relayPin, LOW);
-  Serial.println("Gate Opened");
-  delay(1000);
-  digitalWrite(relayPin, HIGH);
 }
 
 void checkLoopSequence() {
@@ -72,8 +83,12 @@ void checkLoopSequence() {
     Serial.println("Loop B detected, waiting for Loop A...");
   }
 
+  if (loopAState && loopBState) {
+    return;
+  }
+
   if ((loopADetected || loopBDetected) && millis() - detectionTimestamp > timeout) {
-    Serial.println("Timeout: Second loop not detected in time.");
+    Serial.println("Timeout: Second loop not detected in time. Resetting sequence...");
     resetSequence();
     return;
   }
@@ -93,31 +108,7 @@ void checkLoopSequence() {
   }
 }
 
-void checkIncomingCommand() {
-  static String inputString = "";
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '%') {
-      inputString += c;
-      if (inputString == "|OPENEN%") {
-        openGate();
-      }
-      inputString = "";  // reset for next command
-    } else {
-      inputString += c;
-    }
-  }
-}
-
-void sendHeartbeat() {
-  if (millis() - lastHeartbeatTime >= heartbeatInterval) {
-    lastHeartbeatTime = millis();
-    Serial.println("|HLT%");
-  }
-}
-
 void loop() {
-  checkLoopSequence();
   checkIncomingCommand();
-  sendHeartbeat();
+  checkLoopSequence();
 }
