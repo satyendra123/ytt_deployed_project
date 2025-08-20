@@ -36,6 +36,9 @@ void loop() {
 EX-2
 #define relayPin 9
 String receivedString = "";
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 3000; // 3 seconds
+
 void setup() {
   Serial.begin(115200);
   pinMode(relayPin, OUTPUT);
@@ -55,7 +58,7 @@ void checkIncomingCommand() {
 
     if (c == '%') {
       receivedString.trim();
-      Serial.println(receivedString);
+      Serial.println(receivedString); // echo received command
       if (receivedString == "|OPENEN%") {
         openGate();
       }
@@ -63,6 +66,20 @@ void checkIncomingCommand() {
     }
   }
 }
+
+void sendHeartbeat() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastSendTime >= sendInterval) {
+    Serial.println("|HLT%");
+    lastSendTime = currentMillis;
+  }
+}
+
+void loop() {
+  checkIncomingCommand();
+  sendHeartbeat();
+}
+
 
 void loop() {
   checkIncomingCommand();
