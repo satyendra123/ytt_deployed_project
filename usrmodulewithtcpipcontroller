@@ -84,3 +84,119 @@ void loop() {
 void loop() {
   checkIncomingCommand();
 }
+
+EX-3 yttdeployedcode
+#define relayPin 9
+#define LOOP_A_PIN 6
+#define LOOP_B_PIN 7
+
+String receivedString = "";
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 3000;
+
+bool loopADetected = false;
+bool loopBDetected = false;
+bool sequenceComplete = false;
+
+unsigned long detectionTimestamp = 0;
+unsigned long lastSequenceResetTime = 0;
+unsigned long timeout = 120000;
+
+String gateId = "01";
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH);
+  pinMode(LOOP_A_PIN, INPUT_PULLUP);
+  pinMode(LOOP_B_PIN, INPUT_PULLUP);
+}
+
+void openGate() {
+  digitalWrite(relayPin, LOW);
+  delay(500);
+  digitalWrite(relayPin, HIGH);
+}
+
+void checkIncomingCommand() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    receivedString += c;
+
+    if (c == '%') {
+      receivedString.trim();
+      Serial.println(receivedString);
+      if (receivedString == "|OPENEN%") {
+        openGate();
+      }
+      receivedString = "";
+    }
+  }
+}
+
+void resetSequence() {
+  loopADetected = false;
+  loopBDetected = false;
+  detectionTimestamp = 0;
+  //Serial.println("Sequence reset.");
+}
+
+void sendEntryExitData(bool isEntry) {
+  String msg = "|AA|" + gateId + "|" + (isEntry ? "entry" : "exit") + "|FF|";
+  Serial.println(msg);
+}
+
+void checkLoopSequence() {
+  bool loopAState = digitalRead(LOOP_A_PIN) == LOW;
+  bool loopBState = digitalRead(LOOP_B_PIN) == LOW;
+
+  if (sequenceComplete) {
+    if (!loopAState && !loopBState && (millis() - lastSequenceResetTime > 2000)) {
+      resetSequence();
+      sequenceComplete = false;
+      Serial.println("Ready for next detection...");
+    }
+    return;
+  }
+
+  if (loopAState && !loopADetected && !loopBDetected && !loopBState) {
+    loopADetected = true;
+    detectionTimestamp = millis();
+    //Serial.println("Loop A detected, waiting for Loop B...");
+  }
+
+  if (loopBState && !loopBDetected && !loopADetected && !loopAState) {
+    loopBDetected = true;
+    detectionTimestamp = millis();
+    //Serial.println("Loop B detected, waiting for Loop A...");
+  }
+
+  if (loopAState && loopBState) {
+    return;
+  }
+
+  if ((loopADetected || loopBDetected) && millis() - detectionTimestamp > timeout) {
+    //Serial.println("Timeout: Second loop not detected in time. Resetting sequence...");
+    resetSequence();
+    return;
+  }
+
+  if (loopADetected && !loopBDetected && !loopAState && loopBState) {
+    //Serial.println("Sequence: Loop A -> Loop B (Car Entry)");
+    sendEntryExitData(true);
+    sequenceComplete = true;
+    lastSequenceResetTime = millis();
+  }
+
+  if (loopBDetected && !loopADetected && !loopBState && loopAState) {
+    //Serial.println("Sequence: Loop B -> Loop A (Car Exit)");
+    sendEntryExitData(false);
+    sequenceComplete = true;
+    lastSequenceResetTime = millis();
+  }
+}
+
+void loop() {
+  checkIncomingCommand();
+  checkLoopSequence();
+}
