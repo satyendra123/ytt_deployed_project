@@ -31,3 +31,38 @@ void checkIncomingCommand() {
 void loop() {
   checkIncomingCommand();
 }
+
+EX-2
+#define relayPin 9
+String receivedString = "";
+void setup() {
+  Serial.begin(115200);
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH);
+}
+
+void openGate() {
+  digitalWrite(relayPin, LOW);
+  delay(1000);
+  digitalWrite(relayPin, HIGH);
+}
+
+void checkIncomingCommand() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    receivedString += c;
+
+    if (c == '%') {
+      receivedString.trim();
+      Serial.println(receivedString);
+      if (receivedString == "|OPENEN%") {
+        openGate();
+      }
+      receivedString = "";
+    }
+  }
+}
+
+void loop() {
+  checkIncomingCommand();
+}
