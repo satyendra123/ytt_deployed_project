@@ -1,0 +1,276 @@
+/* ========================= INCLUDES ========================= */
+#include "stm32f4xx_hal.h"
+#include "wizchip_conf.h"
+#include "socket.h"
+#include <string.h>
+#include <stdio.h>
+
+/* ========================= DEFINES ========================== */
+#define LOOP_A_PIN        GPIO_PIN_6
+#define LOOP_A_PORT       GPIOB
+
+#define LOOP_B_PIN        GPIO_PIN_7
+#define LOOP_B_PORT       GPIOB
+
+#define RELAY_PIN         GPIO_PIN_9
+#define RELAY_PORT        GPIOB
+
+#define W5500_CS_PIN      GPIO_PIN_4
+#define W5500_CS_PORT     GPIOA
+
+#define SOCK_HTTP         0
+#define SERVER_PORT       8000
+#define GATE_ID           1
+
+#define PHY_CHECK_INTERVAL 2000
+
+/* ========================= HANDLES ========================== */
+SPI_HandleTypeDef hspi1;
+IWDG_HandleTypeDef hiwdg;
+
+/* ========================= NETWORK ========================== */
+uint8_t serverIP[4] = {192,168,1,128};
+
+wiz_NetInfo netInfo = {
+    .mac = {0xAA,0xBB,0xCC,0xDD,0xEE,0xFF},
+    .ip  = {192,168,1,157},
+    .sn  = {255,255,255,0},
+    .gw  = {192,168,1,1},
+    .dns = {8,8,8,8},
+    .dhcp = NETINFO_STATIC
+};
+
+/* ========================= STATE ============================ */
+uint32_t detectionTimestamp = 0;
+uint32_t timeout = 120000;
+uint32_t lastBoomSigCheck = 0;
+uint32_t boomSigCheckInterval = 5000;
+uint32_t lastSequenceResetTime = 0;
+uint32_t lastPhyCheckTime = 0;
+
+uint8_t loopADetected = 0;
+uint8_t loopBDetected = 0;
+uint8_t sequenceComplete = 0;
+uint8_t lastLinkStatus = PHY_LINK_OFF;
+
+/* ========================= W5500 SPI ======================== */
+void wizchip_select(void)
+{
+    HAL_GPIO_WritePin(W5500_CS_PORT, W5500_CS_PIN, GPIO_PIN_RESET);
+}
+
+void wizchip_deselect(void)
+{
+    HAL_GPIO_WritePin(W5500_CS_PORT, W5500_CS_PIN, GPIO_PIN_SET);
+}
+
+uint8_t wizchip_read(void)
+{
+    uint8_t rx, tx = 0xFF;
+    HAL_SPI_TransmitReceive(&hspi1, &tx, &rx, 1, HAL_MAX_DELAY);
+    return rx;
+}
+
+void wizchip_write(uint8_t wb)
+{
+    HAL_SPI_Transmit(&hspi1, &wb, 1, HAL_MAX_DELAY);
+}
+
+/* ========================= ETHERNET INIT ==================== */
+void Ethernet_Init(void)
+{
+    reg_wizchip_cs_cbfunc(wizchip_select, wizchip_deselect);
+    reg_wizchip_spi_cbfunc(wizchip_read, wizchip_write);
+
+    uint8_t txsize[8] = {2,2,2,2,2,2,2,2};
+    uint8_t rxsize[8] = {2,2,2,2,2,2,2,2};
+
+    wizchip_init(txsize, rxsize);
+    wizchip_setnetinfo(&netInfo);
+}
+
+/* ========================= PHY LINK CHECK =================== */
+void checkPhyLink(void)
+{
+    if (HAL_GetTick() - lastPhyCheckTime < PHY_CHECK_INTERVAL)
+        return;
+
+    lastPhyCheckTime = HAL_GetTick();
+
+    uint8_t link = wizphy_getphylink();
+
+    /* LINK DOWN → UP */
+    if (link == PHY_LINK_ON && lastLinkStatus == PHY_LINK_OFF)
+    {
+        /* Reinitialize W5500 */
+        wizchip_sw_reset();
+        HAL_Delay(200);
+
+        wizchip_setnetinfo(&netInfo);
+
+        /* Close all sockets */
+        for (int i = 0; i < 8; i++)
+            closesocket(i);
+    }
+
+    lastLinkStatus = link;
+}
+
+/* ========================= RESET SEQUENCE =================== */
+void resetSequence(void)
+{
+    loopADetected = 0;
+    loopBDetected = 0;
+    detectionTimestamp = 0;
+}
+
+/* ========================= RELAY ============================ */
+void openGate(void)
+{
+    HAL_GPIO_WritePin(RELAY_PORT, RELAY_PIN, GPIO_PIN_RESET);
+    HAL_Delay(1000);
+    HAL_GPIO_WritePin(RELAY_PORT, RELAY_PIN, GPIO_PIN_SET);
+}
+
+/* ========================= HTTP POST ======================== */
+void sendEntryExitData(uint8_t isEntry)
+{
+    char payload[128];
+    char request[512];
+
+    sprintf(payload,
+        "{\"gate_id\":\"%d\",\"event\":\"%s\"}",
+        GATE_ID, isEntry ? "entry" : "exit");
+
+    if (getSn_SR(SOCK_HTTP) != SOCK_CLOSED)
+        closesocket(SOCK_HTTP);
+
+    socket(SOCK_HTTP, Sn_MR_TCP, 5000, 0);
+
+    if (connect(SOCK_HTTP, serverIP, SERVER_PORT) != SOCK_OK)
+        goto close;
+
+    sprintf(request,
+        "POST /vehicle_data HTTP/1.1\r\n"
+        "Host: 192.168.1.128\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %d\r\n\r\n"
+        "%s\r\n",
+        strlen(payload), payload);
+
+    send(SOCK_HTTP, (uint8_t*)request, strlen(request));
+
+close:
+    closesocket(SOCK_HTTP);
+}
+
+/* ========================= BOOM SIGNAL ====================== */
+void checkBoomSig(void)
+{
+    if (HAL_GetTick() - lastBoomSigCheck < boomSigCheckInterval)
+        return;
+
+    lastBoomSigCheck = HAL_GetTick();
+
+    char buffer[256];
+
+    if (getSn_SR(SOCK_HTTP) != SOCK_CLOSED)
+        closesocket(SOCK_HTTP);
+
+    socket(SOCK_HTTP, Sn_MR_TCP, 5001, 0);
+
+    if (connect(SOCK_HTTP, serverIP, SERVER_PORT) != SOCK_OK)
+        goto close;
+
+    send(SOCK_HTTP,
+        (uint8_t*)
+        "GET /check_boomsig?gate_id=1 HTTP/1.1\r\n"
+        "Host: 192.168.1.128\r\n"
+        "Connection: close\r\n\r\n",
+        98);
+
+    int len = recv(SOCK_HTTP, (uint8_t*)buffer, sizeof(buffer)-1);
+    if (len > 0)
+    {
+        buffer[len] = 0;
+        if (strstr(buffer, "|OPENEN%"))
+            openGate();
+    }
+
+close:
+    closesocket(SOCK_HTTP);
+}
+
+/* ========================= LOOP LOGIC ======================= */
+void checkLoopSequence(void)
+{
+    uint8_t loopA = HAL_GPIO_ReadPin(LOOP_A_PORT, LOOP_A_PIN) == GPIO_PIN_RESET;
+    uint8_t loopB = HAL_GPIO_ReadPin(LOOP_B_PORT, LOOP_B_PIN) == GPIO_PIN_RESET;
+
+    if (sequenceComplete)
+    {
+        if (!loopA && !loopB &&
+            HAL_GetTick() - lastSequenceResetTime > 2000)
+        {
+            resetSequence();
+            sequenceComplete = 0;
+        }
+        return;
+    }
+
+    if (loopA && !loopADetected && !loopBDetected && !loopB)
+    {
+        loopADetected = 1;
+        detectionTimestamp = HAL_GetTick();
+    }
+
+    if (loopB && !loopBDetected && !loopADetected && !loopA)
+    {
+        loopBDetected = 1;
+        detectionTimestamp = HAL_GetTick();
+    }
+
+    if ((loopADetected || loopBDetected) &&
+        HAL_GetTick() - detectionTimestamp > timeout)
+    {
+        resetSequence();
+        return;
+    }
+
+    if (loopADetected && !loopBDetected && !loopA && loopB)
+    {
+        sendEntryExitData(1);
+        sequenceComplete = 1;
+        lastSequenceResetTime = HAL_GetTick();
+    }
+
+    if (loopBDetected && !loopADetected && !loopB && loopA)
+    {
+        sendEntryExitData(0);
+        sequenceComplete = 1;
+        lastSequenceResetTime = HAL_GetTick();
+    }
+}
+
+/* ========================= MAIN ============================= */
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_SPI1_Init();
+    MX_IWDG_Init();
+
+    Ethernet_Init();
+
+    HAL_GPIO_WritePin(RELAY_PORT, RELAY_PIN, GPIO_PIN_SET);
+
+    while (1)
+    {
+        HAL_IWDG_Refresh(&hiwdg);
+
+        checkPhyLink();        // ⭐ CRITICAL FIX
+        checkLoopSequence();
+        checkBoomSig();
+    }
+}
