@@ -1,3 +1,5 @@
+Note- in this what happens is when 
+
 /* ========================= INCLUDES ========================= */
 #include "stm32f4xx_hal.h"
 #include "wizchip_conf.h"
