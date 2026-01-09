@@ -39,8 +39,10 @@
 #define SOCK_GET   0
 #define SOCK_POST  1
 #define SERVER_PORT 8000
-#define SEQ_TIMEOUT 3000
 #define GET_INTERVAL_MS 2000
+#define RESET_DELAY      3000
+#define SEQ_TIMEOUT 3000
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -65,9 +67,15 @@ wiz_NetInfo readInfo;
 
 uint8_t server_ip[4] = {192, 168, 1, 128};
 
-volatile uint8_t loopASeen = 0;
-volatile uint8_t loopBSeen = 0;
-volatile uint32_t detectTick = 0;
+
+uint8_t loopADetected = 0;
+uint8_t loopBDetected = 0;
+uint8_t sequenceComplete = 0;
+
+uint32_t loopDetectTick = 0;     // replaces detectionTick
+uint32_t sequenceLockTick = 0;   // replaces lastSequenceResetTick
+uint32_t boomPollTick = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -118,6 +126,13 @@ uint8_t checkLinkStatus(void){
 		return 0;
 	}
 }
+
+void resetSequence(void)
+{
+    loopADetected = 0;
+    loopBDetected = 0;
+}
+
 
 void trigger_relay(void)
 {
@@ -190,47 +205,72 @@ void checkLoopSequence(void)
 {
     uint32_t now = HAL_GetTick();
 
-    uint8_t A = (HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin) == GPIO_PIN_RESET);
-    uint8_t B = (HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin) == GPIO_PIN_RESET);
+    uint8_t loopAState = (HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin) == GPIO_PIN_RESET);
 
-    if (!loopASeen && !loopBSeen)
+    uint8_t loopBState = (HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin) == GPIO_PIN_RESET);
+
+    /* ---------------- SEQUENCE LOCK ---------------- */
+    /* Wait until vehicle fully leaves both loops */
+    if (sequenceComplete)
     {
-        if (A)
+        if (!loopAState && !loopBState &&
+            (now - sequenceLockTick > RESET_DELAY))
         {
-            loopASeen = 1;
-            detectTick = now;
-        }
-        else if (B)
-        {
-            loopBSeen = 1;
-            detectTick = now;
+            resetSequence();
+            sequenceComplete = 0;
         }
         return;
     }
 
-    if (loopASeen && !loopBSeen && B)
-       {
-           http_post_vehicle_event("ENTRY");
-           loopASeen = 0;
-           loopBSeen = 0;
-           return;
-       }
-
-       /* B → A  (EXIT) */
-    if (loopBSeen && !loopASeen && A)
-       {
-           http_post_vehicle_event("EXIT");
-           loopASeen = 0;
-           loopBSeen = 0;
-           return;
-       }
-
-    if (now - detectTick > SEQ_TIMEOUT)
+    /* ---------------- FIRST LOOP DETECTION ---------------- */
+    if (loopAState && !loopADetected && !loopBDetected && !loopBState)
     {
-        loopASeen = 0;
-        loopBSeen = 0;
+        loopADetected = 1;
+        loopDetectTick = now;
+        return;
+    }
+
+    if (loopBState && !loopBDetected && !loopADetected && !loopAState)
+    {
+        loopBDetected = 1;
+        loopDetectTick = now;
+        return;
+    }
+
+    /* ---------------- BOTH LOOPS ACTIVE → IGNORE ---------------- */
+    if (loopAState && loopBState)
+        return;
+
+    /* ---------------- TIMEOUT SAFETY ---------------- */
+    if ((loopADetected || loopBDetected) &&
+        (now - loopDetectTick > SEQ_TIMEOUT))
+    {
+        resetSequence();
+        return;
+    }
+
+    /* ---------------- ENTRY: A → release → B ---------------- */
+    if (loopADetected && !loopBDetected &&
+        !loopAState && loopBState)
+    {
+        http_post_vehicle_event("ENTRY");
+        sequenceComplete = 1;
+        sequenceLockTick = now;
+        return;
+    }
+
+    /* ---------------- EXIT: B → release → A ---------------- */
+    if (loopBDetected && !loopADetected &&
+        !loopBState && loopAState)
+    {
+        http_post_vehicle_event("EXIT");
+        sequenceComplete = 1;
+        sequenceLockTick = now;
+        return;
     }
 }
+
+
 
 /* USER CODE END 0 */
 
@@ -281,11 +321,12 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  checkLoopSequence();
-	  if (HAL_GetTick() - detectTick >= GET_INTERVAL_MS)
+	  if (HAL_GetTick() - boomPollTick >= GET_INTERVAL_MS)
 	  {
-		  detectTick = HAL_GetTick();
-		  http_get_boomsig();
+	      boomPollTick = HAL_GetTick();
+	      http_get_boomsig();
 	  }
+
   }
   /* USER CODE END 3 */
 }
