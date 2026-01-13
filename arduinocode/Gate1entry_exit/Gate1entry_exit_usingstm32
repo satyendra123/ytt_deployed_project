@@ -39,10 +39,10 @@
 #define SOCK_GET   0
 #define SOCK_POST  1
 #define SERVER_PORT 8000
-#define GET_INTERVAL_MS 2000
-#define RESET_DELAY      3000
+#define GET_INTERVAL_MS 3000
+#define RESET_DELAY      2000
 #define SEQ_TIMEOUT 3000
-
+#define DEBOUNCE_MS 20
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -68,13 +68,18 @@ wiz_NetInfo readInfo;
 uint8_t server_ip[4] = {192, 168, 1, 128};
 
 
-uint8_t loopADetected = 0;
-uint8_t loopBDetected = 0;
+uint8_t loopASeen = 0;
+uint8_t loopBSeen = 0;
 uint8_t sequenceComplete = 0;
 
-uint32_t loopDetectTick = 0;     // replaces detectionTick
-uint32_t sequenceLockTick = 0;   // replaces lastSequenceResetTick
+uint32_t loopStartTick = 0;
+uint32_t sequenceDoneTick = 0;
+
+/* Previous states for edge detection */
+static uint8_t prevLoopA = 1;
+static uint8_t prevLoopB = 1;
 uint32_t boomPollTick = 0;
+
 
 /* USER CODE END PV */
 
@@ -89,6 +94,21 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+int __io_putchar(int ch){
+   HAL_UART_Transmit(&huart2,(uint8_t*)&ch,1,HAL_MAX_DELAY);
+   return ch;
+}
+
+int _write(int file, char *ptr, int len)
+{
+    (void) file;
+    int DataIdx;
+    for (DataIdx = 0; DataIdx < len; DataIdx++)
+     {
+       ITM_SendChar(*ptr++);
+     }
+    return len;
+}
 
 void cs_sel(void)
 {
@@ -129,8 +149,11 @@ uint8_t checkLinkStatus(void){
 
 void resetSequence(void)
 {
-    loopADetected = 0;
-    loopBDetected = 0;
+    loopASeen = 0;
+    loopBSeen = 0;
+    sequenceComplete = 0;
+    loopStartTick = 0;
+    sequenceDoneTick = 0;
 }
 
 
@@ -171,104 +194,149 @@ void http_get_boomsig(void) {
 /* ================= HTTP POST ================= */
 void http_post_vehicle_event(const char *event)
 {
-	char txBuf[256];
-	uint8_t rxBuf[256];
-	sprintf(txBuf,
-	        "POST /api/vehicle_data HTTP/1.1\r\n"
-	        "Host: 192.168.1.128:8000\r\n"
-	        "Content-Type: application/json\r\n"
-	        "Content-Length: %d\r\n"
-	        "Connection: close\r\n\r\n"
-	        "{\"gate_id\":\"1\",\"event\":\"%s\"}",
-	        (int)strlen("{\"gate_id\":\"1\",\"event\":\"\"}") + strlen(event),
-	        event);
+    char body[128];
+    char txBuf[512];
+    uint8_t rxBuf[256];
 
-	socket(SOCK_POST, Sn_MR_TCP, 5001, 0);
+    /* ---------- JSON BODY ---------- */
+    sprintf(body,
+            "{\"gate_id\":\"1\",\"event\":\"%s\"}",
+            event);
 
-	if (connect(SOCK_POST, server_ip, SERVER_PORT) != SOCK_OK)
-		goto close_socket;
+    int bodyLen = strlen(body);
 
-	send(SOCK_POST, (uint8_t*)txBuf, strlen(txBuf));
-	uint32_t start = HAL_GetTick();
-	while (HAL_GetTick() - start < 1000)
-	{
-		if (getSn_RX_RSR(SOCK_POST) > 0)
-		{
-			recv(SOCK_POST, rxBuf, sizeof(rxBuf)); break;
-		}
-	}
-	close_socket: disconnect(SOCK_POST);
-	close(SOCK_POST);
+    /* ---------- HTTP REQUEST ---------- */
+    sprintf(txBuf,
+            "POST /api/vehicle_data HTTP/1.1\r\n"
+            "Host: 192.168.1.128:8000\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: close\r\n\r\n"
+            "%s",
+            bodyLen,
+            body);
+
+    /* ---------- SOCKET CLEANUP ---------- */
+    close(SOCK_POST);
+
+    if (socket(SOCK_POST, Sn_MR_TCP, 5001, 0) != SOCK_OK)
+    {
+        printf("POST socket open failed\r\n");
+        return;
+    }
+
+    if (connect(SOCK_POST, server_ip, SERVER_PORT) != SOCK_OK)
+    {
+        printf("POST connect failed\r\n");
+        close(SOCK_POST);
+        return;
+    }
+
+    int sent = send(SOCK_POST, (uint8_t*)txBuf, strlen(txBuf));
+    if (sent <= 0)
+    {
+        printf("POST send failed\r\n");
+        goto close_socket;
+    }
+
+    /* ---------- WAIT FOR RESPONSE ---------- */
+    uint32_t start = HAL_GetTick();
+    while (HAL_GetTick() - start < 1000)
+    {
+        if (getSn_RX_RSR(SOCK_POST) > 0)
+        {
+            int len = recv(SOCK_POST, rxBuf, sizeof(rxBuf)-1);
+            if (len > 0)
+            {
+                rxBuf[len] = 0;
+                printf("POST RESP:\r\n%s\r\n", rxBuf);
+            }
+            break;
+        }
+    }
+
+close_socket:
+    disconnect(SOCK_POST);
+    close(SOCK_POST);
 }
+
 
 void checkLoopSequence(void)
 {
     uint32_t now = HAL_GetTick();
 
-    uint8_t loopAState = (HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin) == GPIO_PIN_RESET);
+    /* Read current loop states */
+    uint8_t loopA = HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin);
+    uint8_t loopB = HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin);
 
-    uint8_t loopBState = (HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin) == GPIO_PIN_RESET);
+    /* Falling edge detection */
+    uint8_t loopAFalling = (prevLoopA == 1 && loopA == 0);
+    uint8_t loopBFalling = (prevLoopB == 1 && loopB == 0);
 
-    /* ---------------- SEQUENCE LOCK ---------------- */
-    /* Wait until vehicle fully leaves both loops */
+    prevLoopA = loopA;
+    prevLoopB = loopB;
+
+    /* ---------------- SEQUENCE DONE ---------------- */
     if (sequenceComplete)
     {
-        if (!loopAState && !loopBState &&
-            (now - sequenceLockTick > RESET_DELAY))
+        if (sequenceDoneTick == 0)
+            sequenceDoneTick = now;
+
+        /* Wait for clear OR force reset */
+        if ((loopA == 1 && loopB == 1) ||
+            (now - sequenceDoneTick > RESET_DELAY_MS))
         {
             resetSequence();
-            sequenceComplete = 0;
         }
         return;
     }
 
-    /* ---------------- FIRST LOOP DETECTION ---------------- */
-    if (loopAState && !loopADetected && !loopBDetected && !loopBState)
+    /* ---------------- FIRST HIT ---------------- */
+    if (!loopASeen && !loopBSeen)
     {
-        loopADetected = 1;
-        loopDetectTick = now;
+        if (loopAFalling)
+        {
+            loopASeen = 1;
+            loopStartTick = now;
+            return;
+        }
+
+        if (loopBFalling)
+        {
+            loopBSeen = 1;
+            loopStartTick = now;
+            return;
+        }
+
         return;
     }
 
-    if (loopBState && !loopBDetected && !loopADetected && !loopAState)
-    {
-        loopBDetected = 1;
-        loopDetectTick = now;
-        return;
-    }
-
-    /* ---------------- BOTH LOOPS ACTIVE → IGNORE ---------------- */
-    if (loopAState && loopBState)
-        return;
-
-    /* ---------------- TIMEOUT SAFETY ---------------- */
-    if ((loopADetected || loopBDetected) &&
-        (now - loopDetectTick > SEQ_TIMEOUT))
+    /* ---------------- TIMEOUT ---------------- */
+    if (now - loopStartTick > SEQ_TIMEOUT_MS)
     {
         resetSequence();
         return;
     }
 
-    /* ---------------- ENTRY: A → release → B ---------------- */
-    if (loopADetected && !loopBDetected &&
-        !loopAState && loopBState)
+    /* ---------------- ENTRY ---------------- */
+    if (loopASeen && loopBFalling)
     {
-        http_post_vehicle_event("ENTRY");
+        printf("ENTRY\n");
+        http_post_vehicle_event("Entry_loop");
         sequenceComplete = 1;
-        sequenceLockTick = now;
         return;
     }
 
-    /* ---------------- EXIT: B → release → A ---------------- */
-    if (loopBDetected && !loopADetected &&
-        !loopBState && loopAState)
+    /* ---------------- EXIT ---------------- */
+    if (loopBSeen && loopAFalling)
     {
-        http_post_vehicle_event("EXIT");
+        printf("EXIT\n");
+        http_post_vehicle_event("Exit_loop");
         sequenceComplete = 1;
-        sequenceLockTick = now;
         return;
     }
 }
+
 
 
 
@@ -312,7 +380,7 @@ int main(void)
   HAL_Delay(500);
   wizchip_getnetinfo(&readInfo);
   /* USER CODE END 2 */
-
+  printf("SWV Print Started...\r\n");
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -323,7 +391,7 @@ int main(void)
 	  checkLoopSequence();
 	  if (HAL_GetTick() - boomPollTick >= GET_INTERVAL_MS)
 	  {
-	      boomPollTick = HAL_GetTick();
+	     boomPollTick = HAL_GetTick();
 	      http_get_boomsig();
 	  }
 
@@ -478,7 +546,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pins : Loop2_Pin_Pin Loop1_Pin_Pin */
   GPIO_InitStruct.Pin = Loop2_Pin_Pin|Loop1_Pin_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : RL_Pin_Pin */
