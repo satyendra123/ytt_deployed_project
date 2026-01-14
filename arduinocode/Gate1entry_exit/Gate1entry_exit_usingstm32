@@ -40,8 +40,8 @@
 #define SOCK_POST  1
 #define SERVER_PORT 8000
 #define GET_INTERVAL_MS 3000
-#define RESET_DELAY      2000
-#define SEQ_TIMEOUT 3000
+#define SEQ_TIMEOUT     120000
+#define RESET_DELAY     2000
 #define DEBOUNCE_MS 20
 /* USER CODE END PD */
 
@@ -58,26 +58,22 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 
 wiz_NetInfo netInfo ={ .mac={0x00,0x08,0xdc,0xab,0xcd,0xef},
-    		  	  	   .ip ={192,168,1,154},
+    		  	  	   .ip ={192,168,1,158},
   					   .sn ={255,255,255,0},
   					   .gw ={192,168,1,1},
   					   .dns = {8, 8, 8, 8}};
 
 wiz_NetInfo readInfo;
 
-uint8_t server_ip[4] = {192, 168, 1, 128};
+uint8_t server_ip[4] = {192, 168, 1, 124};
 
 
-uint8_t loopASeen = 0;
-uint8_t loopBSeen = 0;
+uint8_t loopADetected = 0;
+uint8_t loopBDetected = 0;
 uint8_t sequenceComplete = 0;
 
-uint32_t loopStartTick = 0;
-uint32_t sequenceDoneTick = 0;
-
-/* Previous states for edge detection */
-static uint8_t prevLoopA = 1;
-static uint8_t prevLoopB = 1;
+uint32_t detectionTimestamp = 0;
+uint32_t lastSequenceResetTime = 0;
 uint32_t boomPollTick = 0;
 
 
@@ -149,66 +145,101 @@ uint8_t checkLinkStatus(void){
 
 void resetSequence(void)
 {
-    loopASeen = 0;
-    loopBSeen = 0;
-    sequenceComplete = 0;
-    loopStartTick = 0;
-    sequenceDoneTick = 0;
+    loopADetected = 0;
+    loopBDetected = 0;
+    detectionTimestamp = 0;
 }
 
 
 void trigger_relay(void)
 {
-    HAL_GPIO_WritePin(RL_Pin_GPIO_Port, RL_Pin_Pin, GPIO_PIN_SET);
-    HAL_Delay(300);
     HAL_GPIO_WritePin(RL_Pin_GPIO_Port, RL_Pin_Pin, GPIO_PIN_RESET);
+    HAL_Delay(300);
+    HAL_GPIO_WritePin(RL_Pin_GPIO_Port, RL_Pin_Pin, GPIO_PIN_SET);
 }
 
 
-void http_get_boomsig(void) {
-	uint8_t rxBuf[512];
-	const char getReq[] = "GET /api/check_boomsig?gate_id=1"
-			"HTTP/1.1\r\n"
-			"Host: 192.168.1.128:8000\r\n"
-			"Connection: close\r\n\r\n";
-	socket(SOCK_GET, Sn_MR_TCP, 5000, 0);
-	if (connect(SOCK_GET, server_ip, SERVER_PORT) != SOCK_OK)
-		goto close_socket;
-	send(SOCK_GET, (uint8_t*)getReq, strlen(getReq));
-	uint32_t start = HAL_GetTick();
-	while (HAL_GetTick() - start < 1000)
-	{
-		if (getSn_RX_RSR(SOCK_GET) > 0)
-	{
-			int len = recv(SOCK_GET, rxBuf, sizeof(rxBuf));
-			if (len > 0 && strstr((char*)rxBuf, "|OPENEN%"))
-			{
-				trigger_relay();
-			} break;
-	}
-	}
-	close_socket: disconnect(SOCK_GET);
-	close(SOCK_GET);
+void http_get_boomsig(void)
+{
+    uint8_t rxBuf[512];
+    memset(rxBuf, 0, sizeof(rxBuf));
+
+    const char getReq[] =
+        "GET /check_boomsig?gate_id=1 HTTP/1.1\r\n"
+        "Host: 192.168.1.124:8000\r\n"
+        "Connection: close\r\n\r\n";
+
+    socket(SOCK_GET, Sn_MR_TCP, 5000, 0);
+
+    if (connect(SOCK_GET, server_ip, SERVER_PORT) != SOCK_OK)
+        goto close_socket;
+
+    send(SOCK_GET, (uint8_t*)getReq, strlen(getReq));
+
+    uint32_t start = HAL_GetTick();
+    int total_len = 0;
+
+    // Wait up to 2 seconds for response
+    while (HAL_GetTick() - start < 2000)
+    {
+        int available = getSn_RX_RSR(SOCK_GET);
+        if (available > 0)
+        {
+            int len = recv(SOCK_GET, rxBuf + total_len, sizeof(rxBuf) - 1 - total_len);
+            if (len > 0)
+            {
+                total_len += len;
+                rxBuf[total_len] = '\0';
+            }
+        }
+    }
+
+    if (total_len > 0)
+    {
+        printf("HTTP RESP:\n%s\n", rxBuf);
+
+        // Find start of JSON body
+        char *body = strstr((char*)rxBuf, "\r\n\r\n");
+        if (body)
+            body += 4;  // skip \r\n\r\n
+
+        if (body && strstr(body, "\"command\":\"|OPENEN%\""))
+        {
+            trigger_relay(); // ✅ open gate
+        }
+    }
+
+close_socket:
+    disconnect(SOCK_GET);
+    close(SOCK_GET);
 }
 
 /* ================= HTTP POST ================= */
-void http_post_vehicle_event(const char *event)
+int http_post_vehicle_event(const char *event)
 {
     char body[128];
     char txBuf[512];
     uint8_t rxBuf[256];
 
-    /* ---------- JSON BODY ---------- */
+    /* ---------- WAIT FOR SOCKET TO BE FREE ---------- */
+    if (getSn_SR(SOCK_POST) != SOCK_CLOSED)
+    {
+        disconnect(SOCK_POST);
+        while (getSn_SR(SOCK_POST) != SOCK_CLOSED);
+        close(SOCK_POST);
+    }
+
+    /* ---------- CREATE JSON ---------- */
     sprintf(body,
             "{\"gate_id\":\"1\",\"event\":\"%s\"}",
             event);
 
     int bodyLen = strlen(body);
 
-    /* ---------- HTTP REQUEST ---------- */
+    /* ---------- BUILD HTTP ---------- */
     sprintf(txBuf,
-            "POST /api/vehicle_data HTTP/1.1\r\n"
-            "Host: 192.168.1.128:8000\r\n"
+            "POST /vehicle_data HTTP/1.1\r\n"
+            "Host: 192.168.1.124:8000\r\n"
             "Content-Type: application/json\r\n"
             "Content-Length: %d\r\n"
             "Connection: close\r\n\r\n"
@@ -216,36 +247,32 @@ void http_post_vehicle_event(const char *event)
             bodyLen,
             body);
 
-    /* ---------- SOCKET CLEANUP ---------- */
-    close(SOCK_POST);
-
+    /* ---------- OPEN SOCKET ---------- */
     if (socket(SOCK_POST, Sn_MR_TCP, 5001, 0) != SOCK_OK)
-    {
-        printf("POST socket open failed\r\n");
-        return;
-    }
+        return 0;
 
+    /* ---------- CONNECT ---------- */
     if (connect(SOCK_POST, server_ip, SERVER_PORT) != SOCK_OK)
     {
-        printf("POST connect failed\r\n");
         close(SOCK_POST);
-        return;
+        return 0;
     }
 
-    int sent = send(SOCK_POST, (uint8_t*)txBuf, strlen(txBuf));
-    if (sent <= 0)
+    /* ---------- SEND ---------- */
+    if (send(SOCK_POST, (uint8_t *)txBuf, strlen(txBuf)) <= 0)
     {
-        printf("POST send failed\r\n");
-        goto close_socket;
+        disconnect(SOCK_POST);
+        close(SOCK_POST);
+        return 0;
     }
 
-    /* ---------- WAIT FOR RESPONSE ---------- */
+    /* ---------- RECEIVE RESPONSE ---------- */
     uint32_t start = HAL_GetTick();
-    while (HAL_GetTick() - start < 1000)
+    while (HAL_GetTick() - start < 1500)
     {
         if (getSn_RX_RSR(SOCK_POST) > 0)
         {
-            int len = recv(SOCK_POST, rxBuf, sizeof(rxBuf)-1);
+            int len = recv(SOCK_POST, rxBuf, sizeof(rxBuf) - 1);
             if (len > 0)
             {
                 rxBuf[len] = 0;
@@ -255,9 +282,14 @@ void http_post_vehicle_event(const char *event)
         }
     }
 
-close_socket:
+    /* ---------- CLEAN CLOSE ---------- */
     disconnect(SOCK_POST);
+    while (getSn_SR(SOCK_POST) != SOCK_CLOSED);
     close(SOCK_POST);
+
+    HAL_Delay(50);   // IMPORTANT: allow TCP stack to settle
+
+    return 1;        // ✅ SUCCESS
 }
 
 
@@ -265,79 +297,71 @@ void checkLoopSequence(void)
 {
     uint32_t now = HAL_GetTick();
 
-    /* Read current loop states */
-    uint8_t loopA = HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin);
-    uint8_t loopB = HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin);
+    /* INPUT_PULLUP: LOW = loop active */
+    uint8_t loopAState = (HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin) == GPIO_PIN_RESET);
+    uint8_t loopBState = (HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin) == GPIO_PIN_RESET);
 
-    /* Falling edge detection */
-    uint8_t loopAFalling = (prevLoopA == 1 && loopA == 0);
-    uint8_t loopBFalling = (prevLoopB == 1 && loopB == 0);
-
-    prevLoopA = loopA;
-    prevLoopB = loopB;
-
-    /* ---------------- SEQUENCE DONE ---------------- */
+    /* ---------------- SEQUENCE COMPLETE ---------------- */
     if (sequenceComplete)
     {
-        if (sequenceDoneTick == 0)
-            sequenceDoneTick = now;
-
-        /* Wait for clear OR force reset */
-        if ((loopA == 1 && loopB == 1) ||
-            (now - sequenceDoneTick > RESET_DELAY_MS))
+        if (!loopAState && !loopBState &&
+            (now - lastSequenceResetTime > RESET_DELAY))
         {
             resetSequence();
+            sequenceComplete = 0;
         }
         return;
     }
 
-    /* ---------------- FIRST HIT ---------------- */
-    if (!loopASeen && !loopBSeen)
+    /* ---------------- FIRST DETECTION ---------------- */
+    if (loopAState && !loopADetected && !loopBDetected && !loopBState)
     {
-        if (loopAFalling)
-        {
-            loopASeen = 1;
-            loopStartTick = now;
-            return;
-        }
-
-        if (loopBFalling)
-        {
-            loopBSeen = 1;
-            loopStartTick = now;
-            return;
-        }
-
+        loopADetected = 1;
+        detectionTimestamp = now;
         return;
     }
+
+    if (loopBState && !loopBDetected && !loopADetected && !loopAState)
+    {
+        loopBDetected = 1;
+        detectionTimestamp = now;
+        return;
+    }
+
+    /* ---------------- BOTH ACTIVE → IGNORE ---------------- */
+    if (loopAState && loopBState)
+        return;
 
     /* ---------------- TIMEOUT ---------------- */
-    if (now - loopStartTick > SEQ_TIMEOUT_MS)
+    if ((loopADetected || loopBDetected) &&
+        (now - detectionTimestamp > SEQ_TIMEOUT))
     {
         resetSequence();
         return;
     }
 
     /* ---------------- ENTRY ---------------- */
-    if (loopASeen && loopBFalling)
+    if (loopADetected && !loopBDetected &&
+        !loopAState && loopBState)
     {
         printf("ENTRY\n");
-        http_post_vehicle_event("Entry_loop");
+        http_post_vehicle_event("entry");
         sequenceComplete = 1;
+        lastSequenceResetTime = now;
         return;
     }
 
     /* ---------------- EXIT ---------------- */
-    if (loopBSeen && loopAFalling)
+    if (loopBDetected && !loopADetected &&
+        !loopBState && loopAState)
     {
         printf("EXIT\n");
-        http_post_vehicle_event("Exit_loop");
+        http_post_vehicle_event("exit");
         sequenceComplete = 1;
+        lastSequenceResetTime = now;
         return;
     }
 }
-
-
 
 
 /* USER CODE END 0 */
@@ -571,7 +595,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(CS_Pin_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
+  HAL_GPIO_WritePin(RL_Pin_GPIO_Port, RL_Pin_Pin, GPIO_PIN_SET);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
