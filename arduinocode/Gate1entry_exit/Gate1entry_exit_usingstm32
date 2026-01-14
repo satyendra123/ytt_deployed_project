@@ -40,7 +40,7 @@
 #define SOCK_POST  1
 #define SERVER_PORT 8000
 #define GET_INTERVAL_MS 3000
-#define SEQ_TIMEOUT     120000
+#define SEQ_TIMEOUT     4000
 #define RESET_DELAY     2000
 #define DEBOUNCE_MS 20
 /* USER CODE END PD */
@@ -215,28 +215,20 @@ close_socket:
 }
 
 /* ================= HTTP POST ================= */
-int http_post_vehicle_event(const char *event)
+void http_post_vehicle_event(const char *event)
 {
     char body[128];
     char txBuf[512];
     uint8_t rxBuf[256];
 
-    /* ---------- WAIT FOR SOCKET TO BE FREE ---------- */
-    if (getSn_SR(SOCK_POST) != SOCK_CLOSED)
-    {
-        disconnect(SOCK_POST);
-        while (getSn_SR(SOCK_POST) != SOCK_CLOSED);
-        close(SOCK_POST);
-    }
-
-    /* ---------- CREATE JSON ---------- */
+    /* ---------- JSON BODY ---------- */
     sprintf(body,
             "{\"gate_id\":\"1\",\"event\":\"%s\"}",
             event);
 
     int bodyLen = strlen(body);
 
-    /* ---------- BUILD HTTP ---------- */
+    /* ---------- HTTP REQUEST ---------- */
     sprintf(txBuf,
             "POST /vehicle_data HTTP/1.1\r\n"
             "Host: 192.168.1.124:8000\r\n"
@@ -247,34 +239,35 @@ int http_post_vehicle_event(const char *event)
             bodyLen,
             body);
 
-    /* ---------- OPEN SOCKET ---------- */
-    if (socket(SOCK_POST, Sn_MR_TCP, 5001, 0) != SOCK_OK)
-        return 0;
-
-    /* ---------- CONNECT ---------- */
-    if (connect(SOCK_POST, server_ip, SERVER_PORT) != SOCK_OK)
-    {
-        close(SOCK_POST);
-        return 0;
-    }
-
-    /* ---------- SEND ---------- */
-    if (send(SOCK_POST, (uint8_t *)txBuf, strlen(txBuf)) <= 0)
-    {
-        disconnect(SOCK_POST);
-        close(SOCK_POST);
-        return 0;
-    }
-    HAL_Delay(500)
-
-    /* ---------- CLEAN CLOSE ---------- */
-    disconnect(SOCK_POST);
-    while (getSn_SR(SOCK_POST) != SOCK_CLOSED);
+    /* ---------- SOCKET CLEANUP ---------- */
     close(SOCK_POST);
 
-    HAL_Delay(50);   // IMPORTANT: allow TCP stack to settle
+    if (socket(SOCK_POST, Sn_MR_TCP, 5001, 0) != SOCK_OK)
+    {
+        printf("POST socket open failed\r\n");
+        return;
+    }
 
-    return 1;        // ✅ SUCCESS
+    if (connect(SOCK_POST, server_ip, SERVER_PORT) != SOCK_OK)
+    {
+        printf("POST connect failed\r\n");
+        close(SOCK_POST);
+        return;
+    }
+
+    int sent = send(SOCK_POST, (uint8_t*)txBuf, strlen(txBuf));
+    if (sent <= 0)
+    {
+        printf("POST send failed\r\n");
+        goto close_socket;
+    }
+
+    /* ---------- WAIT FOR RESPONSE ---------- */
+    HAL_Delay(50);
+
+close_socket:
+    disconnect(SOCK_POST);
+    close(SOCK_POST);
 }
 
 
