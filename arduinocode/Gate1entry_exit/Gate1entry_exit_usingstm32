@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -43,6 +44,7 @@
 #define SEQ_TIMEOUT     4000
 #define RESET_DELAY     2000
 #define DEBOUNCE_MS 20
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,7 +57,18 @@ SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart2;
 
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* USER CODE BEGIN PV */
+typedef enum { VEHICLE_ENTRY, VEHICLE_EXIT } VehicleEvent;
+osMessageQueueId_t vehicleQueueHandle;
+osThreadId_t loopTaskHandle;
+osThreadId_t httpTaskHandle;
 
 wiz_NetInfo netInfo ={ .mac={0x00,0x08,0xdc,0xab,0xcd,0xef},
     		  	  	   .ip ={192,168,1,158},
@@ -84,6 +97,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
+void StartDefaultTask(void *argument);
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -271,76 +286,107 @@ close_socket:
 }
 
 
-void checkLoopSequence(void)
+/* Loop Detection Task */
+void LoopTask(void *argument)
 {
-    uint32_t now = HAL_GetTick();
-
-    /* INPUT_PULLUP: LOW = loop active */
-    uint8_t loopAState = (HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin) == GPIO_PIN_RESET);
-    uint8_t loopBState = (HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin) == GPIO_PIN_RESET);
-
-    /* ---------------- SEQUENCE COMPLETE ---------------- */
-    if (sequenceComplete)
+    (void) argument;
+    for(;;)
     {
-        if (!loopAState && !loopBState &&
-            (now - lastSequenceResetTime > RESET_DELAY))
+        uint32_t now = HAL_GetTick();
+
+        uint8_t loopAState = (HAL_GPIO_ReadPin(Loop1_Pin_GPIO_Port, Loop1_Pin_Pin) == GPIO_PIN_RESET);
+        uint8_t loopBState = (HAL_GPIO_ReadPin(Loop2_Pin_GPIO_Port, Loop2_Pin_Pin) == GPIO_PIN_RESET);
+
+        if (sequenceComplete)
+        {
+            if (!loopAState && !loopBState &&
+                (now - lastSequenceResetTime > RESET_DELAY))
+            {
+                resetSequence();
+                sequenceComplete = 0;
+            }
+            osDelay(5);
+            continue;
+        }
+
+        if (loopAState && !loopADetected && !loopBDetected && !loopBState)
+        {
+            loopADetected = 1;
+            detectionTimestamp = now;
+            osDelay(5);
+            continue;
+        }
+
+        if (loopBState && !loopBDetected && !loopADetected && !loopAState)
+        {
+            loopBDetected = 1;
+            detectionTimestamp = now;
+            osDelay(5);
+            continue;
+        }
+
+        if (loopAState && loopBState)
+        {
+            osDelay(5);
+            continue;
+        }
+
+        if ((loopADetected || loopBDetected) &&
+            (now - detectionTimestamp > SEQ_TIMEOUT))
         {
             resetSequence();
-            sequenceComplete = 0;
+            osDelay(5);
+            continue;
         }
-        return;
-    }
 
-    /* ---------------- FIRST DETECTION ---------------- */
-    if (loopAState && !loopADetected && !loopBDetected && !loopBState)
-    {
-        loopADetected = 1;
-        detectionTimestamp = now;
-        return;
-    }
+        if (loopADetected && !loopBDetected &&
+            !loopAState && loopBState)
+        {
+            VehicleEvent ev = VEHICLE_ENTRY;
+            osMessageQueuePut(vehicleQueueHandle, &ev, 0, 0);
+            sequenceComplete = 1;
+            lastSequenceResetTime = now;
+            resetSequence();
+        }
 
-    if (loopBState && !loopBDetected && !loopADetected && !loopAState)
-    {
-        loopBDetected = 1;
-        detectionTimestamp = now;
-        return;
-    }
+        if (loopBDetected && !loopADetected &&
+            !loopBState && loopAState)
+        {
+            VehicleEvent ev = VEHICLE_EXIT;
+            osMessageQueuePut(vehicleQueueHandle, &ev, 0, 0);
+            sequenceComplete = 1;
+            lastSequenceResetTime = now;
+            resetSequence();
+        }
 
-    /* ---------------- BOTH ACTIVE → IGNORE ---------------- */
-    if (loopAState && loopBState)
-        return;
-
-    /* ---------------- TIMEOUT ---------------- */
-    if ((loopADetected || loopBDetected) &&
-        (now - detectionTimestamp > SEQ_TIMEOUT))
-    {
-        resetSequence();
-        return;
-    }
-
-    /* ---------------- ENTRY ---------------- */
-    if (loopADetected && !loopBDetected &&
-        !loopAState && loopBState)
-    {
-        printf("ENTRY\n");
-        http_post_vehicle_event("entry");
-        sequenceComplete = 1;
-        lastSequenceResetTime = now;
-        return;
-    }
-
-    /* ---------------- EXIT ---------------- */
-    if (loopBDetected && !loopADetected &&
-        !loopBState && loopAState)
-    {
-        printf("EXIT\n");
-        http_post_vehicle_event("exit");
-        sequenceComplete = 1;
-        lastSequenceResetTime = now;
-        return;
+        osDelay(5);
     }
 }
 
+void HttpTask(void *argument)
+{
+    (void) argument;
+    VehicleEvent ev;
+    uint32_t lastBoomPoll = 0;
+
+    for(;;)
+    {
+        while(osMessageQueueGet(vehicleQueueHandle, &ev, NULL, 0) == osOK)
+        {
+            if (ev == VEHICLE_ENTRY) http_post_vehicle_event("entry");
+            else if (ev == VEHICLE_EXIT) http_post_vehicle_event("exit");
+        }
+
+        uint32_t now = HAL_GetTick();
+        if (now - lastBoomPoll >= GET_INTERVAL_MS)
+        {
+            lastBoomPoll = now;
+            http_get_boomsig();
+        }
+
+        osDelay(10);
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -382,7 +428,60 @@ int main(void)
   HAL_Delay(500);
   wizchip_getnetinfo(&readInfo);
   /* USER CODE END 2 */
-  printf("SWV Print Started...\r\n");
+  /* Create vehicle event queue */
+     vehicleQueueHandle = osMessageQueueNew(8, sizeof(VehicleEvent), NULL);
+
+     /* Create tasks */
+     const osThreadAttr_t loopTask_attributes = {
+         .name = "LoopTask",
+         .stack_size = 256*4,
+         .priority = osPriorityHigh,
+     };
+     loopTaskHandle = osThreadNew(LoopTask, NULL, &loopTask_attributes);
+
+     const osThreadAttr_t httpTask_attributes = {
+         .name = "HttpTask",
+         .stack_size = 512*4,
+         .priority = osPriorityNormal,
+     };
+     httpTaskHandle = osThreadNew(HttpTask, NULL, &httpTask_attributes);
+
+  /* Init scheduler */
+    osKernelInitialize();
+    osKernelStart();
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -390,12 +489,12 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  checkLoopSequence();
-	  if (HAL_GetTick() - boomPollTick >= GET_INTERVAL_MS)
-	  {
-	     boomPollTick = HAL_GetTick();
-	      http_get_boomsig();
-	  }
+	  //checkLoopSequence();
+	  //if (HAL_GetTick() - boomPollTick >= GET_INTERVAL_MS)
+	 // {
+	    // boomPollTick = HAL_GetTick();
+	     // http_get_boomsig();
+	  //}
 
   }
   /* USER CODE END 3 */
@@ -580,6 +679,24 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void *argument)
+{
+  /* USER CODE BEGIN 5 */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END 5 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
