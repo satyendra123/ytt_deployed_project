@@ -265,22 +265,7 @@ int http_post_vehicle_event(const char *event)
         close(SOCK_POST);
         return 0;
     }
-
-    /* ---------- RECEIVE RESPONSE ---------- */
-    uint32_t start = HAL_GetTick();
-    while (HAL_GetTick() - start < 1500)
-    {
-        if (getSn_RX_RSR(SOCK_POST) > 0)
-        {
-            int len = recv(SOCK_POST, rxBuf, sizeof(rxBuf) - 1);
-            if (len > 0)
-            {
-                rxBuf[len] = 0;
-                printf("POST RESP:\r\n%s\r\n", rxBuf);
-            }
-            break;
-        }
-    }
+    HAL_Delay(500)
 
     /* ---------- CLEAN CLOSE ---------- */
     disconnect(SOCK_POST);
