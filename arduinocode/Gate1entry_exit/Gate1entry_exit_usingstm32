@@ -71,14 +71,14 @@ osThreadId_t loopTaskHandle;
 osThreadId_t httpTaskHandle;
 
 wiz_NetInfo netInfo ={ .mac={0x00,0x08,0xdc,0xab,0xcd,0xef},
-    		  	  	   .ip ={192,168,1,158},
+    		  	  	   .ip ={192,168,1,157},
   					   .sn ={255,255,255,0},
   					   .gw ={192,168,1,1},
   					   .dns = {8, 8, 8, 8}};
 
 wiz_NetInfo readInfo;
 
-uint8_t server_ip[4] = {192, 168, 1, 124};
+uint8_t server_ip[4] = {192, 168, 1, 128};
 
 
 uint8_t loopADetected = 0;
@@ -181,7 +181,7 @@ void http_get_boomsig(void)
 
     const char getReq[] =
         "GET /check_boomsig?gate_id=1 HTTP/1.1\r\n"
-        "Host: 192.168.1.124:8000\r\n"
+        "Host: 192.168.1.128:8000\r\n"
         "Connection: close\r\n\r\n";
 
     socket(SOCK_GET, Sn_MR_TCP, 5000, 0);
@@ -246,7 +246,7 @@ void http_post_vehicle_event(const char *event)
     /* ---------- HTTP REQUEST ---------- */
     sprintf(txBuf,
             "POST /vehicle_data HTTP/1.1\r\n"
-            "Host: 192.168.1.124:8000\r\n"
+            "Host: 192.168.1.128:8000\r\n"
             "Content-Type: application/json\r\n"
             "Content-Length: %d\r\n"
             "Connection: close\r\n\r\n"
