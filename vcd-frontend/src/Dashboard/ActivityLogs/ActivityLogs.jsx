@@ -9,7 +9,7 @@ const ActivityLogs = () => {
   // Fetch data from the API endpoint
   useEffect(() => {
     const fetchData = () => {
-    fetch("http://127.0.0.1:8000/activity_log/")
+    fetch("http://192.168.1.128:8000/activity_log/")
       .then((response) => {
         if (!response.ok) {
           throw new Error("Failed to fetch data");

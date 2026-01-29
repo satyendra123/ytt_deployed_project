@@ -11,7 +11,7 @@ const Login = ({ setIsLoggedIn }) => {
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post("http://localhost:5000/login/", {
+      const response = await axios.post("http://192.168.1.128:8000/login/", {
         username,
         password,
       });

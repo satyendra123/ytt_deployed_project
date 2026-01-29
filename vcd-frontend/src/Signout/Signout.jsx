@@ -18,7 +18,7 @@ const Signout = ({ setIsLoggedIn }) => {
 
       try {
         const response = await axios.post(
-          "http://localhost:5000/signout/",
+          "http://192.168.1.128:8000/signout/",
           {},
           {
             headers: {

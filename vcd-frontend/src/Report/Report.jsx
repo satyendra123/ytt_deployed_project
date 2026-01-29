@@ -21,7 +21,7 @@ const Report = () => {
   // Fetch report data from backend
   const fetchReportData = async () => {
     try {
-      const response = await fetch("http://127.0.0.1:8000/generate_report/", {
+      const response = await fetch("http://192.168.1.128:8000/generate_report/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -204,7 +204,7 @@ const Report = () => {
                     <td className="px-4 py-2 text-center">Gate {item.gate}</td>
                     <td className="px-4 py-2 text-center capitalize">{item.action}</td>
                     <td className="px-4 py-2 text-center">{new Date(item.created_at).toLocaleDateString()}</td>
-                    <td className="px-4 py-2 text-center">{new Date(log.created_at).toLocaleTimeString("en-IN", {hour12: false,timeZone: "Asia/Kolkata",})}</td>
+                    {/*<td className="px-4 py-2 text-center">{new Date(log.created_at).toLocaleTimeString("en-IN", {hour12: false,timeZone: "Asia/Kolkata",})}</td>*/}
                   </tr>
                 ))
               ) : (

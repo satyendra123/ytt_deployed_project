@@ -15,7 +15,7 @@ function readFilesRecursively(dir, base = '') {
       files = { ...files, ...readFilesRecursively(fullPath, relativePath) };
     } else {
       files[`/${relativePath}`] = {
-        content: fs.readFileSync(fullPath),
+        content: fs.readFileSync(fullPath).toString('base64'),
         contentType: mime.lookup(item) || 'application/octet-stream',
       };
     }
@@ -24,4 +24,11 @@ function readFilesRecursively(dir, base = '') {
   return files;
 }
 
-module.exports = readFilesRecursively;
+// Generate the output JS file with embedded static content
+const staticFiles = readFilesRecursively(path.join(__dirname, 'build'));
+fs.writeFileSync(
+  path.join(__dirname, 'static-files.js'),
+  'module.exports = ' + JSON.stringify(staticFiles, null, 2)
+);
+
+console.log('✅ static-files.js generated successfully.');
